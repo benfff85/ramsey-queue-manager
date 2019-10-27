@@ -45,7 +45,7 @@ public class ClientRegister {
         log.info("Client registered with id: {}", client.getClientId());
     }
 
-    @Scheduled(fixedRate = 60000)
+    @Scheduled(fixedRateString = "${ramsey.client.registration.phone-home.frequency-in-millis}")
     public void phoneHome() {
         log.debug("Phoning Home");
         restTemplate.exchange(url, HttpMethod.PUT, new HttpEntity<>(client), ClientDto.class);

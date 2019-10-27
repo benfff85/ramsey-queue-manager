@@ -11,3 +11,7 @@ ramsey:
       depth: 500
   vertex-count: 288
   subgraph-size: 8
+  client:
+    registration:
+      phone-home:
+       frequency-in-millis: 60000
