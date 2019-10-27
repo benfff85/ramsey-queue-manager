@@ -1,0 +1,13 @@
+logging:
+  level:
+    root: DEBUG
+
+server:
+  port: 8081
+
+ramsey:
+  work-unit:
+    queue:
+      depth: 500
+  vertex-count: 288
+  subgraph-size: 8

@@ -1,0 +1,4 @@
+ramsey:
+  client:
+    registration:
+      url: "http://localhost:8080/api/ramsey/clients"
