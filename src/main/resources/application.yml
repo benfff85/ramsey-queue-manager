@@ -1,17 +1,10 @@
 logging:
   level:
-    root: DEBUG
+    root: INFO
 
 server:
   port: 8081
 
 ramsey:
-  work-unit:
-    queue:
-      depth: 500
   vertex-count: 288
   subgraph-size: 8
-  client:
-    registration:
-      phone-home:
-       frequency-in-millis: 60000

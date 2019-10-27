@@ -2,3 +2,11 @@ ramsey:
   client:
     registration:
       url: "http://localhost:8080/api/ramsey/clients"
+      phone-home:
+        frequency-in-millis: 15000
+  graph:
+    url: "http://localhost:8080/api/ramsey/graphs"
+  work-unit:
+    queue:
+      depth: 500
+      url: "http://localhost:8080/api/ramsey/work-units"
