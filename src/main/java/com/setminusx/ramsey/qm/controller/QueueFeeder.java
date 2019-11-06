@@ -2,6 +2,7 @@ package com.setminusx.ramsey.qm.controller;
 
 import com.setminusx.ramsey.qm.dto.GraphDto;
 import com.setminusx.ramsey.qm.dto.WorkUnitDto;
+import com.setminusx.ramsey.qm.model.Edge;
 import com.setminusx.ramsey.qm.model.WorkUnitStatus;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -15,10 +16,11 @@ import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import javax.annotation.PostConstruct;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 @Slf4j
-
 @Component
 public class QueueFeeder {
 
@@ -28,8 +30,11 @@ public class QueueFeeder {
     @Value("${ramsey.work-unit.queue.url}")
     private String workUnitUrl;
 
-    @Value("${ramsey.work-unit.queue.depth}")
-    private String queueDepth;
+    @Value("${ramsey.work-unit.queue.depth.min}")
+    private Integer queueDepthMin;
+
+    @Value("${ramsey.work-unit.queue.depth.max}")
+    private Integer queueDepthMax;
 
     @Value("${ramsey.vertex-count}")
     private Integer vertexCount;
@@ -41,10 +46,16 @@ public class QueueFeeder {
     private String minGraphUri;
     private String unassignedWorkUnitUri;
 
-    private Integer graphId;
+    private GraphDto graph;
+    private List<Edge> edges;
 
     @PostConstruct
-    public void register() {
+    private void init() {
+        createUris();
+        pullInitialGraph();
+    }
+
+    private void createUris() {
         minGraphUri = UriComponentsBuilder.fromHttpUrl(graphUrl)
                 .queryParam("type", "min")
                 .queryParam("vertexCount", vertexCount)
@@ -57,44 +68,104 @@ public class QueueFeeder {
                 .queryParam("subgraphSize", subgraphSize)
                 .queryParam("pageSize", 500000)
                 .toUriString();
-
     }
 
-    @Scheduled(fixedRateString = "${ramsey.client.registration.phone-home.frequency-in-millis}")
+    private void pullInitialGraph() {
+        log.info("Initializing edge list");
+        edges = new ArrayList<>();
+        for (int i = 0; i < vertexCount; i++) {
+            for (int j = i + 1; j < vertexCount; j++) {
+                edges.add(Edge.builder().vertexOne(i).vertexTwo(j).build());
+            }
+        }
+        applyGraphAndEdgeColoring(getMinGraph());
+    }
+
+    private void applyGraphAndEdgeColoring(GraphDto graph) {
+        log.info("Setting graph to graph id: {}", graph.getGraphId());
+        this.graph = graph;
+        log.info("Initializing edge coloring");
+        for (int i = 0; i < graph.getEdgeData().length(); i++) {
+            edges.get(i).setColoring(graph.getEdgeData().charAt(i));
+        }
+    }
+
+    private GraphDto getMinGraph() {
+        log.info("Fetching min graph");
+        ResponseEntity<List<GraphDto>> response = restTemplate.exchange(minGraphUri, HttpMethod.GET, null, new ParameterizedTypeReference<List<GraphDto>>() {});
+        GraphDto graphDto = response.getBody().get(0);
+        log.info("Min graph id: {}", graphDto.getGraphId());
+        return graphDto;
+    }
+
+    @Scheduled(fixedRateString = "${ramsey.work-unit.queue.frequency-in-millis}")
     public void feedQueue() {
 
         log.info("Processing feedQueue");
 
-        GraphDto graph = getMinGraph();
-        if (graphId == null) {
-            graphId = graph.getGraphId();
-        }
-
+        GraphDto currentMinGraph = getMinGraph();
         List<WorkUnitDto> workUnits = getUnassignedWorkUnits();
-        int currentQueueDepth = workUnits.size();
-        if (!graphId.equals(graph.getGraphId())) {
+        if (!graph.getGraphId().equals(currentMinGraph.getGraphId())) {
             cancelAllOpenWorkUnits(workUnits);
-            currentQueueDepth = 0;
+            applyGraphAndEdgeColoring(currentMinGraph);
+            workUnits.clear();
         }
 
-        // TODO Complete flow
+        if ( workUnits.size() >= queueDepthMin) {
+            log.info("No work units to create, exiting");
+            return;
+        }
+
+        int workUnitCountToCreate = queueDepthMax - workUnits.size();
+        log.info("Work units to create: {}", workUnitCountToCreate);
+
+
+        int leftEdgeIndex = 0;
+        int rightEdgeIndex = 1;
+        if (!workUnits.isEmpty()) {
+            log.info("Getting edge data from last existing work unit");
+            WorkUnitDto lastWorkUnit = workUnits.get(workUnits.size() - 1);
+            leftEdgeIndex = edges.indexOf(lastWorkUnit.getEdgesToFlip().get(0));
+            log.info("Left edge index of last work unit: {}", leftEdgeIndex);
+            rightEdgeIndex = edges.indexOf(lastWorkUnit.getEdgesToFlip().get(1));
+            log.info("Right edge index of last work unit: {}", rightEdgeIndex);
+        }
+
+        log.info("Creating work units...");
+        List<WorkUnitDto> newWorkUnits = new ArrayList<>();
+        outerloop:
+        for (int i = leftEdgeIndex; i < graph.getEdgeData().length() - 1; i++) {
+            Edge leftEdge = edges.get(i);
+            for (int j = rightEdgeIndex; j < graph.getEdgeData().length(); j++) {
+                Edge rightEdge = edges.get(j);
+                if (leftEdge.getColoring() != rightEdge.getColoring()) {
+                    newWorkUnits.add(WorkUnitDto.builder()
+                            .baseGraphId(graph.getGraphId())
+                            .edgesToFlip(new ArrayList<>(Arrays.asList(leftEdge, rightEdge)))
+                            .vertexCount(vertexCount)
+                            .subgraphSize(subgraphSize)
+                            .build());
+
+                    if (--workUnitCountToCreate == 0) {
+                        break outerloop;
+                    }
+                }
+            }
+        }
+
+        log.info("Work units created: {}", newWorkUnits.size());
+        log.info("Publishing work units");
+        HttpEntity<List<WorkUnitDto>> request = new HttpEntity<>(newWorkUnits);
+        restTemplate.exchange(unassignedWorkUnitUri, HttpMethod.POST, request, new ParameterizedTypeReference<List<WorkUnitDto>>() {});
 
         log.info("Completed feedQueue");
 
     }
 
-    private GraphDto getMinGraph() {
-        log.info("Fetching min graph");
-        ResponseEntity<List<GraphDto>> response = restTemplate.exchange(minGraphUri, HttpMethod.GET, null, new ParameterizedTypeReference<List<GraphDto>>(){});
-        GraphDto graph = response.getBody().get(0);
-        log.info("Min graph id: {}", graph.getGraphId());
-        return graph;
-    }
 
     private List<WorkUnitDto> getUnassignedWorkUnits() {
         log.info("Fetching unassigned work units");
-        ResponseEntity<List<WorkUnitDto>> response =
-                restTemplate.exchange(unassignedWorkUnitUri, HttpMethod.GET, null, new ParameterizedTypeReference<List<WorkUnitDto>>(){});
+        ResponseEntity<List<WorkUnitDto>> response = restTemplate.exchange(unassignedWorkUnitUri, HttpMethod.GET, null, new ParameterizedTypeReference<List<WorkUnitDto>>() {});
         List<WorkUnitDto> workUnits = response.getBody();
         log.info("Unassigned work unit count: {}", workUnits.size());
         return workUnits;
@@ -106,7 +177,7 @@ public class QueueFeeder {
             workUnit.setStatus(WorkUnitStatus.CANCELLED);
         }
         HttpEntity<List<WorkUnitDto>> request = new HttpEntity<>(workUnits);
-        restTemplate.exchange(unassignedWorkUnitUri, HttpMethod.POST, request, new ParameterizedTypeReference<List<WorkUnitDto>>(){});
+        restTemplate.exchange(unassignedWorkUnitUri, HttpMethod.POST, request, new ParameterizedTypeReference<List<WorkUnitDto>>() {});
     }
 
 }

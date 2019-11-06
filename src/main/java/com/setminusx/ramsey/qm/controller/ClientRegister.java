@@ -14,7 +14,6 @@ import org.springframework.web.client.RestTemplate;
 import javax.annotation.PostConstruct;
 
 @Slf4j
-
 @Component
 public class ClientRegister {
 
@@ -34,12 +33,7 @@ public class ClientRegister {
     @PostConstruct
     public void register() {
         log.info("Registering client");
-        ClientDto clientToCreate = new ClientDto();
-        clientToCreate.setVertexCount(vertexCount);
-        clientToCreate.setSubgraphSize(subgraphSize);
-        clientToCreate.setType(ClientType.QUEUEMANAGER);
-
-        HttpEntity<ClientDto> request = new HttpEntity<>(clientToCreate);
+        HttpEntity<ClientDto> request = new HttpEntity<>(ClientDto.builder().vertexCount(vertexCount).subgraphSize(subgraphSize).type(ClientType.QUEUEMANAGER).build());
         ResponseEntity<ClientDto> response = restTemplate.exchange(url, HttpMethod.POST, request, ClientDto.class);
         client = response.getBody();
         log.info("Client registered with id: {}", client.getClientId());

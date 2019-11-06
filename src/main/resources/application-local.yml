@@ -8,5 +8,8 @@ ramsey:
     url: "http://localhost:8080/api/ramsey/graphs"
   work-unit:
     queue:
-      depth: 500
+      depth:
+        min: 500
+        max: 1000
       url: "http://localhost:8080/api/ramsey/work-units"
+      frequency-in-millis: 60000
