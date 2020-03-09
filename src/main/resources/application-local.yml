@@ -9,7 +9,7 @@ ramsey:
   work-unit:
     queue:
       depth:
-        min: 500
-        max: 1000
+        min: 150
+        max: 300
       url: "http://localhost:8080/api/ramsey/work-units"
       frequency-in-millis: 60000

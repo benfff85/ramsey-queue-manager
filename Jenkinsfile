@@ -55,16 +55,4 @@ pipeline {
 
     }
 
-    post {
-        success {
-            mail to: 'ben.ferenchak@gmail.com',
-            subject: "Successful Pipeline: ${currentBuild.fullDisplayName}",
-            body: "Successful build completed ${env.BUILD_URL}"
-        }
-        failure {
-            mail to: 'ben.ferenchak@gmail.com',
-            subject: "Failed Pipeline: ${currentBuild.fullDisplayName}",
-            body: "Something is wrong with ${env.BUILD_URL}"
-        }
-    }
 }

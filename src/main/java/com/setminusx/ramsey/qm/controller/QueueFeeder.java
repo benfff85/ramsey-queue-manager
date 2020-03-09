@@ -2,14 +2,11 @@ package com.setminusx.ramsey.qm.controller;
 
 import com.setminusx.ramsey.qm.dto.GraphDto;
 import com.setminusx.ramsey.qm.dto.WorkUnitDto;
+import com.setminusx.ramsey.qm.exception.RemoteCallException;
 import com.setminusx.ramsey.qm.model.Edge;
 import com.setminusx.ramsey.qm.model.WorkUnitStatus;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.ParameterizedTypeReference;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpMethod;
-import org.springframework.http.ResponseEntity;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
@@ -19,6 +16,8 @@ import javax.annotation.PostConstruct;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+
+import static java.util.Objects.isNull;
 
 @Slf4j
 @Component
@@ -92,10 +91,13 @@ public class QueueFeeder {
 
     private GraphDto getMinGraph() {
         log.info("Fetching min graph");
-        ResponseEntity<List<GraphDto>> response = restTemplate.exchange(minGraphUri, HttpMethod.GET, null, new ParameterizedTypeReference<List<GraphDto>>() {});
-        GraphDto graphDto = response.getBody().get(0);
-        log.info("Min graph id: {}", graphDto.getGraphId());
-        return graphDto;
+        GraphDto[] graphDtos = restTemplate.getForObject(minGraphUri, GraphDto[].class);
+        if (isNull(graphDtos) || graphDtos.length != 1 || isNull(graphDtos[0])) {
+            throw new RemoteCallException("Error when fetching initial min graph");
+        }
+
+        log.info("Min graph id: {}", graphDtos[0].getGraphId());
+        return graphDtos[0];
     }
 
     @Scheduled(fixedRateString = "${ramsey.work-unit.queue.frequency-in-millis}")
@@ -111,7 +113,7 @@ public class QueueFeeder {
             workUnits.clear();
         }
 
-        if ( workUnits.size() >= queueDepthMin) {
+        if (workUnits.size() >= queueDepthMin) {
             log.info("No work units to create, exiting");
             return;
         }
@@ -155,9 +157,7 @@ public class QueueFeeder {
 
         log.info("Work units created: {}", newWorkUnits.size());
         log.info("Publishing work units");
-        HttpEntity<List<WorkUnitDto>> request = new HttpEntity<>(newWorkUnits);
-        restTemplate.exchange(unassignedWorkUnitUri, HttpMethod.POST, request, new ParameterizedTypeReference<List<WorkUnitDto>>() {});
-
+        restTemplate.postForObject(unassignedWorkUnitUri, newWorkUnits, WorkUnitDto[].class);
         log.info("Completed feedQueue");
 
     }
@@ -165,10 +165,12 @@ public class QueueFeeder {
 
     private List<WorkUnitDto> getUnassignedWorkUnits() {
         log.info("Fetching unassigned work units");
-        ResponseEntity<List<WorkUnitDto>> response = restTemplate.exchange(unassignedWorkUnitUri, HttpMethod.GET, null, new ParameterizedTypeReference<List<WorkUnitDto>>() {});
-        List<WorkUnitDto> workUnits = response.getBody();
-        log.info("Unassigned work unit count: {}", workUnits.size());
-        return workUnits;
+        WorkUnitDto[] workUnitDtos = restTemplate.getForObject(unassignedWorkUnitUri, WorkUnitDto[].class);
+        if (isNull(workUnitDtos)) {
+            throw new RemoteCallException("Error when fetching unassigned work units");
+        }
+        log.info("Unassigned work unit count: {}", workUnitDtos.length);
+        return new ArrayList<>(Arrays.asList(workUnitDtos));
     }
 
     private void cancelAllOpenWorkUnits(List<WorkUnitDto> workUnits) {
@@ -176,8 +178,7 @@ public class QueueFeeder {
         for (WorkUnitDto workUnit : workUnits) {
             workUnit.setStatus(WorkUnitStatus.CANCELLED);
         }
-        HttpEntity<List<WorkUnitDto>> request = new HttpEntity<>(workUnits);
-        restTemplate.exchange(unassignedWorkUnitUri, HttpMethod.POST, request, new ParameterizedTypeReference<List<WorkUnitDto>>() {});
+        restTemplate.postForObject(unassignedWorkUnitUri, workUnits, WorkUnitDto[].class);
     }
 
 }

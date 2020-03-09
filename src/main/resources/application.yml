@@ -1,6 +1,8 @@
 logging:
   level:
-    root: INFO
+    root: DEBUG
+  pattern:
+    level: "%clr([%X{X-B3-TraceId}]){blue} %clr(%5p){green}"
 
 server:
   port: 8081
