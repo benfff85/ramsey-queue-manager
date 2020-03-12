@@ -25,7 +25,11 @@ public class ClientRegister {
     private Integer subgraphSize;
 
     private ClientDto client;
-    private final RestTemplate restTemplate = new RestTemplate();
+    private final RestTemplate restTemplate;
+
+    public ClientRegister(RestTemplate restTemplate) {
+        this.restTemplate = restTemplate;
+    }
 
     @PostConstruct
     public void register() {

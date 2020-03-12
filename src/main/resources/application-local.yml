@@ -13,3 +13,6 @@ ramsey:
         max: 300
       url: "http://localhost:8080/api/ramsey/work-units"
       frequency-in-millis: 60000
+    assignment:
+      count-per-client: 10
+      frequency-in-millis: 60000

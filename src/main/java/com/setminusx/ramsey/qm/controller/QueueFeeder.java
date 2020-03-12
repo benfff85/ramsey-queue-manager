@@ -41,12 +41,15 @@ public class QueueFeeder {
     @Value("${ramsey.subgraph-size}")
     private Integer subgraphSize;
 
-    private RestTemplate restTemplate = new RestTemplate();
+    private RestTemplate restTemplate;
     private String minGraphUri;
     private String unassignedWorkUnitUri;
-
     private GraphDto graph;
     private List<Edge> edges;
+
+    public QueueFeeder(RestTemplate restTemplate) {
+        this.restTemplate = restTemplate;
+    }
 
     @PostConstruct
     private void init() {
