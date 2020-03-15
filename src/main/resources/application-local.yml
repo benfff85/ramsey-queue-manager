@@ -13,10 +13,10 @@ ramsey:
   work-unit:
     queue:
       depth:
-        min: 1000
+        min: 2500
         max: 5000
       url: "http://localhost:8080/api/ramsey/work-units"
       frequency-in-millis: 30000
     assignment:
-      count-per-client: 100
+      count-per-client: 250
       frequency-in-millis: 30000
