@@ -54,8 +54,8 @@ public class ClientMonitor {
                     workUnit.setAssignedDate(null);
                     workUnit.setStatus(NEW);
                     workUnit.setAssignedClient(null);
-                    workUnitService.save(workUnits);
                 }
+                workUnitService.save(workUnits);
             }
         }
         log.info("Completed check for inactive clients");
