@@ -1,6 +1,6 @@
 ramsey:
   client:
-    url: "http://localhost:8080/api/ramsey/clients"
+    url: "http://ramsey-mw:8080/api/ramsey/clients"
     registration:
       phone-home:
         frequency-in-millis: 60000
@@ -9,13 +9,13 @@ ramsey:
         threshold-in-minutes: 5
 
   graph:
-    url: "http://localhost:8080/api/ramsey/graphs"
+    url: "http://ramsey-mw:8080/api/ramsey/graphs"
   work-unit:
     queue:
       depth:
         min: 2500
         max: 5000
-      url: "http://localhost:8080/api/ramsey/work-units"
+      url: "http://ramsey-mw:8080/api/ramsey/work-units"
       frequency-in-millis: 30000
     assignment:
       count-per-client: 500
