@@ -1,19 +1,17 @@
 package com.setminusx.ramsey.qm.service;
 
-import com.setminusx.ramsey.qm.dto.ClientDto;
 import com.setminusx.ramsey.qm.dto.WorkUnitDto;
 import com.setminusx.ramsey.qm.model.WorkUnitStatus;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import javax.annotation.PostConstruct;
+import java.net.URI;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.Date;
 import java.util.List;
 
 import static java.util.Objects.isNull;
@@ -36,12 +34,10 @@ public class WorkUnitService {
 
 
     private RestTemplate restTemplate;
-    private ClientService clientService;
     private String workUnitUri;
 
-    public WorkUnitService(RestTemplate restTemplate, ClientService clientService) {
+    public WorkUnitService(RestTemplate restTemplate) {
         this.restTemplate = restTemplate;
-        this.clientService = clientService;
     }
 
     @PostConstruct
@@ -50,27 +46,7 @@ public class WorkUnitService {
                 .queryParam("subgraphSize", subgraphSize)
                 .queryParam("vertexCount", vertexCount)
                 .toUriString();
-    }
 
-    @Scheduled(fixedRateString = "${ramsey.work-unit.assignment.frequency-in-millis}")
-    public void assignWorkUnits() {
-        Date assignedDate;
-        List<ClientDto> clients = clientService.getActive();
-        for (ClientDto client : clients) {
-            List<WorkUnitDto> workUnits = getWorkUnitsAssignedToClient(client.getClientId());
-
-            if (workUnits.size() < workUnitCountPerClient) {
-                assignedDate = new Date();
-                List<WorkUnitDto> workUnitsToAssign = getUnassignedWorkUnits(workUnitCountPerClient - workUnits.size());
-                for (WorkUnitDto workUnitToAssign : workUnitsToAssign) {
-                    workUnitToAssign.setAssignedClient(client.getClientId());
-                    workUnitToAssign.setAssignedDate(assignedDate);
-                    workUnitToAssign.setStatus(WorkUnitStatus.ASSIGNED);
-                }
-                save(workUnitsToAssign);
-                log.info("Work units assigned to client {}", client.getClientId());
-            }
-        }
     }
 
 
@@ -78,7 +54,7 @@ public class WorkUnitService {
         log.info("Fetching work units assigned with client id {}", clientId);
         String uri = UriComponentsBuilder.fromHttpUrl(workUnitUri).queryParam("assignedClientId", clientId).queryParam("status", WorkUnitStatus.ASSIGNED).queryParam("pageSize", workUnitCountPerClient).toUriString();
         WorkUnitDto[] workUnits = restTemplate.getForObject(uri, WorkUnitDto[].class);
-        if (isNull(workUnits)) {
+        if (isNull(workUnits) || workUnits.length == 0) {
             log.info("No assigned work units");
             return Collections.emptyList();
         }
@@ -91,8 +67,8 @@ public class WorkUnitService {
         log.info("Fetching {} unassigned work units", count);
         String uri = UriComponentsBuilder.fromHttpUrl(workUnitUri).queryParam("status", WorkUnitStatus.NEW).queryParam("pageSize", count).toUriString();
         WorkUnitDto[] workUnits = restTemplate.getForObject(uri, WorkUnitDto[].class);
-        if (isNull(workUnits)) {
-            log.info("No unassigned");
+        if (isNull(workUnits) || workUnits.length == 0) {
+            log.info("No unassigned work units");
             return Collections.emptyList();
         }
 
@@ -100,8 +76,20 @@ public class WorkUnitService {
         return Arrays.asList(workUnits);
     }
 
-    public void save(List<WorkUnitDto> workUnitsToAssign) {
-        restTemplate.postForObject(workUnitUrl, workUnitsToAssign, WorkUnitDto[].class);
+    public WorkUnitDto getLast(Integer graphId) {
+        log.info("Fetching last work unit for graph id {}", graphId);
+        URI uri = UriComponentsBuilder.fromHttpUrl(workUnitUrl + "/last").queryParam("graphId", graphId).build().toUri();
+        WorkUnitDto[] workUnits = restTemplate.getForObject(uri, WorkUnitDto[].class);
+        if (isNull(workUnits) || workUnits.length == 0) {
+            log.info("No last work unit");
+            return null;
+        }
+
+        return workUnits[0];
+    }
+
+    public void save(List<WorkUnitDto> workUnits) {
+        restTemplate.postForObject(workUnitUrl, workUnits, WorkUnitDto[].class);
     }
 
 }

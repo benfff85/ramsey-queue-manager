@@ -7,7 +7,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.util.Date;
+import java.time.LocalDateTime;
 
 @Data
 @Builder
@@ -20,7 +20,7 @@ public class ClientDto {
     private Integer vertexCount;
     private ClientType type;
     private ClientStatus status;
-    private Date createdDate;
-    private Date lastPhoneHomeDate;
+    private LocalDateTime createdDate;
+    private LocalDateTime lastPhoneHomeDate;
 
 }

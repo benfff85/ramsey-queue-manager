@@ -20,8 +20,8 @@ import static java.util.Objects.isNull;
 @Component
 public class ClientService {
 
-    @Value("${ramsey.client.registration.url}")
-    private String url;
+    @Value("${ramsey.client.url}")
+    private String baseUrl;
 
     @Value("${ramsey.vertex-count}")
     private Integer vertexCount;
@@ -30,7 +30,7 @@ public class ClientService {
     private Integer subgraphSize;
 
     private RestTemplate restTemplate;
-    private String activeClientsUri;
+    private String clientsUri;
 
     public ClientService(RestTemplate restTemplate) {
         this.restTemplate = restTemplate;
@@ -38,24 +38,36 @@ public class ClientService {
 
     @PostConstruct
     private void createUris() {
-        activeClientsUri = UriComponentsBuilder.fromHttpUrl(url)
+        clientsUri = UriComponentsBuilder.fromHttpUrl(baseUrl)
                 .queryParam("subgraphSize", subgraphSize)
                 .queryParam("vertexCount", vertexCount)
-                .queryParam("clientType", ClientType.CLIQUECHECKER)
-                .queryParam("clientStatus", ClientStatus.ACTIVE)
                 .toUriString();
     }
 
 
-    public List<ClientDto> getActive() {
-        log.info("Fetching active clients");
-        ClientDto[] clients = restTemplate.getForObject(activeClientsUri, ClientDto[].class);
-        if (isNull(clients)) {
-            log.info("No active clients");
+    public List<ClientDto> get(ClientType clientType, ClientStatus clientStatus) {
+        log.info("Fetching clients");
+
+        String url = clientsUri;
+        if (!ClientType.ALL.equals(clientType)) {
+            url = UriComponentsBuilder.fromHttpUrl(url).queryParam("clientType", clientType).toUriString();
+        }
+        if (!ClientStatus.ALL.equals(clientStatus)) {
+            url = UriComponentsBuilder.fromHttpUrl(url).queryParam("clientStatus", clientStatus).toUriString();
+        }
+
+        ClientDto[] clients = restTemplate.getForObject(url, ClientDto[].class);
+        if (isNull(clients) || clients.length == 0) {
+            log.info("No clients");
             return Collections.emptyList();
         }
 
-        log.info("Found {} active clients", clients.length);
+        log.info("Found {} clients", clients.length);
         return Arrays.asList(clients);
     }
+
+    public void save(ClientDto clientDto) {
+        restTemplate.postForObject(baseUrl, clientDto, ClientDto.class);
+    }
+
 }
