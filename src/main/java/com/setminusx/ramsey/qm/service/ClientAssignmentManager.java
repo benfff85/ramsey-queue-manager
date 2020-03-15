@@ -49,7 +49,7 @@ public class ClientAssignmentManager {
                     workUnitToAssign.setStatus(WorkUnitStatus.ASSIGNED);
                 }
                 workUnitService.save(workUnitsToAssign);
-                log.info("Work units assigned to client {}", client.getClientId());
+                log.info("Client {} assigned {} work units", client.getClientId(), workUnitsToAssign.size());
             }
         }
         log.info("Completed assignment of work units");
