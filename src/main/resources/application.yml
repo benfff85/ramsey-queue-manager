@@ -4,8 +4,9 @@ logging:
   pattern:
     level: "%clr([%X{X-B3-TraceId}]){blue} %clr(%5p){green}"
 
-server:
-  port: 8081
+spring:
+  main:
+    web-application-type: none
 
 ramsey:
   vertex-count: 288
