@@ -49,6 +49,7 @@ public class ClientMonitor {
                 client.setStatus(INACTIVE);
                 clientService.save(client);
 
+                log.info("Flipping assigned work units back to NEW status");
                 List<WorkUnitDto> workUnits = workUnitService.getWorkUnitsAssignedToClient(client.getClientId());
                 for (WorkUnitDto workUnit : workUnits) {
                     workUnit.setAssignedDate(null);

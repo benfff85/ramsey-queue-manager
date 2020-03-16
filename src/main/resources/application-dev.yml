@@ -3,20 +3,20 @@ ramsey:
     url: "http://ramsey-mw:8080/api/ramsey/clients"
     registration:
       phone-home:
-        frequency-in-millis: 60000
+        frequency-in-millis: ${CLIENT_PHONE_HOME_FREQ:60000}
       timeout:
-        frequency-in-millis: 60000
-        threshold-in-minutes: 5
+        frequency-in-millis: ${CLIENT_TIMEOUT_CHECK_FREQ:60000}
+        threshold-in-minutes: ${CLIENT_TIMEOUT_THRESHOLD:5}
 
   graph:
     url: "http://ramsey-mw:8080/api/ramsey/graphs"
   work-unit:
     queue:
       depth:
-        min: 2500
-        max: 5000
+        min: ${WORK_UNIT_QUEUE_DEPTH_MIN:2500}
+        max: ${WORK_UNIT_QUEUE_DEPTH_MAX:5000}
       url: "http://ramsey-mw:8080/api/ramsey/work-units"
-      frequency-in-millis: 30000
+      frequency-in-millis: ${WORK_UNIT_QUEUE_FEEDER_FREQ:30000}
     assignment:
-      count-per-client: 500
-      frequency-in-millis: 30000
+      count-per-client: ${WORK_UNIT_ASSIGNMENT_COUNT:500}
+      frequency-in-millis: ${WORK_UNIT_ASSIGNMENT_FREQ:30000}
