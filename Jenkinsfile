@@ -5,7 +5,7 @@ pipeline {
     }
     tools {
         maven 'Maven'
-        jdk 'Java 13'
+        jdk 'Java 14'
     }
 
     environment {
