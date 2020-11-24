@@ -3,7 +3,6 @@ package com.setminusx.ramsey.qm.controller;
 import com.setminusx.ramsey.qm.dto.GraphDto;
 import com.setminusx.ramsey.qm.dto.WorkUnitDto;
 import com.setminusx.ramsey.qm.model.Edge;
-import com.setminusx.ramsey.qm.model.WorkUnitStatus;
 import com.setminusx.ramsey.qm.service.GraphService;
 import com.setminusx.ramsey.qm.service.WorkUnitService;
 import lombok.extern.slf4j.Slf4j;
@@ -14,12 +13,14 @@ import org.springframework.stereotype.Component;
 import javax.annotation.PostConstruct;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 
 import static com.setminusx.ramsey.qm.model.WorkUnitPriority.MEDIUM;
+import static com.setminusx.ramsey.qm.model.WorkUnitStatus.CANCELLED;
 import static com.setminusx.ramsey.qm.model.WorkUnitStatus.NEW;
+import static java.util.Arrays.asList;
 import static java.util.Objects.nonNull;
+import static org.springframework.util.CollectionUtils.isEmpty;
 
 @Slf4j
 @Component
@@ -40,8 +41,8 @@ public class QueueFeeder {
     private GraphDto graph;
     private List<Edge> edges;
 
-    private GraphService graphService;
-    private WorkUnitService workUnitService;
+    private final GraphService graphService;
+    private final WorkUnitService workUnitService;
 
     public QueueFeeder(GraphService graphService, WorkUnitService workUnitService) {
         this.graphService = graphService;
@@ -114,7 +115,7 @@ public class QueueFeeder {
                 if (leftEdge.getColoring() != rightEdge.getColoring()) {
                     newWorkUnits.add(WorkUnitDto.builder()
                             .baseGraphId(graph.getGraphId())
-                            .edgesToFlip(new ArrayList<>(Arrays.asList(leftEdge, rightEdge)))
+                            .edgesToFlip(asList(leftEdge, rightEdge))
                             .vertexCount(vertexCount)
                             .subgraphSize(subgraphSize)
                             .createdDate(now)
@@ -123,10 +124,7 @@ public class QueueFeeder {
                             .build());
 
                     if (--workUnitCountToCreate == 0) {
-                        log.info("Work units created: {}", newWorkUnits.size());
-                        log.info("Publishing work units");
-                        workUnitService.save(newWorkUnits);
-                        log.info("Completed feedQueue");
+                        publishNewWorkUnits(newWorkUnits);
                         return;
                     }
                 }
@@ -134,15 +132,25 @@ public class QueueFeeder {
             rightEdgeIndex = i + 1;
         }
 
+        if (isEmpty(newWorkUnits)) {
+            log.info("Publishing final batch of new work units for this graph");
+            publishNewWorkUnits(newWorkUnits);
+            return;
+        }
+
         log.warn("No work units left to create for graph id {}", graph.getGraphId());
     }
 
+    private void publishNewWorkUnits(List<WorkUnitDto> newWorkUnits) {
+        log.info("Work units created: {}", newWorkUnits.size());
+        log.info("Publishing work units");
+        workUnitService.save(newWorkUnits);
+        log.info("Completed feedQueue");
+    }
 
     private void cancelAllOpenWorkUnits(List<WorkUnitDto> workUnits) {
         log.info("Cancelling all open work units");
-        for (WorkUnitDto workUnit : workUnits) {
-            workUnit.setStatus(WorkUnitStatus.CANCELLED);
-        }
+        workUnits.forEach(wu -> wu.setStatus(CANCELLED));
         workUnitService.save(workUnits);
     }
 
