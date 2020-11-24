@@ -132,7 +132,7 @@ public class QueueFeeder {
             rightEdgeIndex = i + 1;
         }
 
-        if (isEmpty(newWorkUnits)) {
+        if (!isEmpty(newWorkUnits)) {
             log.info("Publishing final batch of new work units for this graph");
             publishNewWorkUnits(newWorkUnits);
             return;
