@@ -5,7 +5,7 @@ pipeline {
     }
     tools {
         maven 'Maven'
-        jdk 'Java 14'
+        jdk 'Java 16'
     }
 
     environment {
@@ -31,15 +31,15 @@ pipeline {
             }
         }
 
-        stage('SonarQube') {
-            steps {
-                script {
-                    withSonarQubeEnv('SonarQube') {
-                        sh 'mvn sonar:sonar'
-                    }
-                }
-            }
-        }
+//         stage('SonarQube') {
+//             steps {
+//                 script {
+//                     withSonarQubeEnv('SonarQube') {
+//                         sh 'mvn sonar:sonar'
+//                     }
+//                 }
+//             }
+//        }
 
         stage ('Docker') {
             steps {

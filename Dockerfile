@@ -1,4 +1,4 @@
-FROM adoptopenjdk:14-jre-hotspot
+FROM adoptopenjdk:16-jre-hotspot
 RUN mkdir /Ramsey
 COPY target/ramsey-queue-manager.jar /Ramsey/
 COPY target/version.txt /Ramsey/
