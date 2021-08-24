@@ -24,7 +24,7 @@ public class GraphService {
     @Value("${ramsey.subgraph-size}")
     private Integer subgraphSize;
 
-    private RestTemplate restTemplate;
+    private final RestTemplate restTemplate;
     private String minGraphUri;
 
     public GraphService(RestTemplate restTemplate) {

@@ -33,7 +33,7 @@ public class WorkUnitService {
     private Integer workUnitCountPerClient;
 
 
-    private RestTemplate restTemplate;
+    private final RestTemplate restTemplate;
     private String workUnitUri;
 
     public WorkUnitService(RestTemplate restTemplate) {

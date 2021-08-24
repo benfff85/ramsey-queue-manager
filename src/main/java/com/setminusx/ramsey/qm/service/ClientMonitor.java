@@ -24,8 +24,8 @@ public class ClientMonitor {
     @Value("${ramsey.client.registration.timeout.threshold-in-minutes}")
     private Integer timeoutThreshold;
 
-    private ClientService clientService;
-    private WorkUnitService workUnitService;
+    private final ClientService clientService;
+    private final WorkUnitService workUnitService;
 
 
     public ClientMonitor(ClientService clientService, WorkUnitService workUnitService) {

@@ -23,8 +23,8 @@ public class ClientAssignmentManager {
     @Value("${ramsey.work-unit.assignment.count-per-client}")
     private Integer workUnitCountPerClient;
 
-    private ClientService clientService;
-    private WorkUnitService workUnitService;
+    private final ClientService clientService;
+    private final WorkUnitService workUnitService;
 
 
     public ClientAssignmentManager(ClientService clientService, WorkUnitService workUnitService) {

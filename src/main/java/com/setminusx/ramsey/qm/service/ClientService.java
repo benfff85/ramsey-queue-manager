@@ -29,7 +29,7 @@ public class ClientService {
     @Value("${ramsey.subgraph-size}")
     private Integer subgraphSize;
 
-    private RestTemplate restTemplate;
+    private final RestTemplate restTemplate;
     private String clientsUri;
 
     public ClientService(RestTemplate restTemplate) {
