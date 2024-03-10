@@ -1,13 +1,12 @@
 package com.setminusx.ramsey.qm.service;
 
 import com.setminusx.ramsey.qm.dto.GraphDto;
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
-
-import javax.annotation.PostConstruct;
 
 import static java.util.Objects.isNull;
 

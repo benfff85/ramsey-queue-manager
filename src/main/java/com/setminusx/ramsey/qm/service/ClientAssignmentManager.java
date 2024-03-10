@@ -13,7 +13,7 @@ import java.util.List;
 
 import static com.setminusx.ramsey.qm.model.ClientStatus.ACTIVE;
 import static com.setminusx.ramsey.qm.model.ClientType.CLIQUECHECKER;
-import static java.time.LocalDateTime.now;
+import static com.setminusx.ramsey.qm.utility.TimeUtility.now;
 
 @Slf4j
 @Component

@@ -2,16 +2,15 @@ package com.setminusx.ramsey.qm.controller;
 
 import com.setminusx.ramsey.qm.dto.ClientDto;
 import com.setminusx.ramsey.qm.model.ClientType;
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
 
-import javax.annotation.PostConstruct;
-
 import static com.setminusx.ramsey.qm.model.ClientStatus.ACTIVE;
-import static java.time.LocalDateTime.now;
+import static com.setminusx.ramsey.qm.utility.TimeUtility.now;
 
 @Slf4j
 @Component

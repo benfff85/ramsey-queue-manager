@@ -5,12 +5,12 @@ import com.setminusx.ramsey.qm.dto.WorkUnitDto;
 import com.setminusx.ramsey.qm.model.Edge;
 import com.setminusx.ramsey.qm.service.GraphService;
 import com.setminusx.ramsey.qm.service.WorkUnitService;
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-import javax.annotation.PostConstruct;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -18,6 +18,7 @@ import java.util.List;
 import static com.setminusx.ramsey.qm.model.WorkUnitPriority.MEDIUM;
 import static com.setminusx.ramsey.qm.model.WorkUnitStatus.CANCELLED;
 import static com.setminusx.ramsey.qm.model.WorkUnitStatus.NEW;
+import static com.setminusx.ramsey.qm.utility.TimeUtility.now;
 import static java.util.Arrays.asList;
 import static java.util.Objects.nonNull;
 import static org.springframework.util.CollectionUtils.isEmpty;
@@ -106,7 +107,7 @@ public class QueueFeeder {
 
         log.info("Creating work units...");
         List<WorkUnitDto> newWorkUnits = new ArrayList<>();
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = now();
 
         for (int i = leftEdgeIndex; i < graph.getEdgeData().length() - 1; i++) {
             Edge leftEdge = edges.get(i);

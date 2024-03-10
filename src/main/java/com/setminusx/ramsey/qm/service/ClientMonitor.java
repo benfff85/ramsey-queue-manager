@@ -15,7 +15,7 @@ import static com.setminusx.ramsey.qm.model.ClientStatus.ACTIVE;
 import static com.setminusx.ramsey.qm.model.ClientStatus.INACTIVE;
 import static com.setminusx.ramsey.qm.model.ClientType.ALL;
 import static com.setminusx.ramsey.qm.model.WorkUnitStatus.NEW;
-import static java.time.LocalDateTime.now;
+import static com.setminusx.ramsey.qm.utility.TimeUtility.now;
 
 @Slf4j
 @Component
