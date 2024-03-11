@@ -3,6 +3,7 @@ package com.setminusx.ramsey.qm.controller;
 import com.setminusx.ramsey.qm.dto.GraphDto;
 import com.setminusx.ramsey.qm.dto.WorkUnitDto;
 import com.setminusx.ramsey.qm.model.Edge;
+import com.setminusx.ramsey.qm.model.WorkUnitAnalysisType;
 import com.setminusx.ramsey.qm.service.GraphService;
 import com.setminusx.ramsey.qm.service.WorkUnitService;
 import jakarta.annotation.PostConstruct;
@@ -15,6 +16,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
+import static com.setminusx.ramsey.qm.model.WorkUnitAnalysisType.TARGETED;
 import static com.setminusx.ramsey.qm.model.WorkUnitPriority.MEDIUM;
 import static com.setminusx.ramsey.qm.model.WorkUnitStatus.CANCELLED;
 import static com.setminusx.ramsey.qm.model.WorkUnitStatus.NEW;
@@ -121,6 +123,7 @@ public class QueueFeeder {
                             .subgraphSize(subgraphSize)
                             .createdDate(now)
                             .priority(MEDIUM)
+                            .workUnitAnalysisType(TARGETED)
                             .status(NEW)
                             .build());
 
