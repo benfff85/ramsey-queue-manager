@@ -16,6 +16,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
+import static com.setminusx.ramsey.qm.model.WorkUnitAnalysisType.COMPREHENSIVE;
 import static com.setminusx.ramsey.qm.model.WorkUnitAnalysisType.TARGETED;
 import static com.setminusx.ramsey.qm.model.WorkUnitPriority.MEDIUM;
 import static com.setminusx.ramsey.qm.model.WorkUnitStatus.CANCELLED;
@@ -34,6 +35,9 @@ public class QueueFeeder {
 
     @Value("${ramsey.work-unit.queue.depth.max}")
     private Integer queueDepthMax;
+
+    @Value("${ramsey.work-unit.queue.analysis-type}")
+    private List<WorkUnitAnalysisType> analysisType;
 
     @Value("${ramsey.vertex-count}")
     private Integer vertexCount;
@@ -116,16 +120,31 @@ public class QueueFeeder {
             for (int j = rightEdgeIndex + 1; j < graph.getEdgeData().length(); j++) {
                 Edge rightEdge = edges.get(j);
                 if (leftEdge.getColoring() != rightEdge.getColoring()) {
-                    newWorkUnits.add(WorkUnitDto.builder()
-                            .baseGraphId(graph.getGraphId())
-                            .edgesToFlip(asList(leftEdge, rightEdge))
-                            .vertexCount(vertexCount)
-                            .subgraphSize(subgraphSize)
-                            .createdDate(now)
-                            .priority(MEDIUM)
-                            .workUnitAnalysisType(TARGETED)
-                            .status(NEW)
-                            .build());
+                    if(analysisType.contains(TARGETED)) {
+                        newWorkUnits.add(WorkUnitDto.builder()
+                                .baseGraphId(graph.getGraphId())
+                                .edgesToFlip(asList(leftEdge, rightEdge))
+                                .vertexCount(vertexCount)
+                                .subgraphSize(subgraphSize)
+                                .createdDate(now)
+                                .priority(MEDIUM)
+                                .workUnitAnalysisType(TARGETED)
+                                .status(NEW)
+                                .build());
+                    }
+
+                    if(analysisType.contains(COMPREHENSIVE)) {
+                        newWorkUnits.add(WorkUnitDto.builder()
+                                .baseGraphId(graph.getGraphId())
+                                .edgesToFlip(asList(leftEdge, rightEdge))
+                                .vertexCount(vertexCount)
+                                .subgraphSize(subgraphSize)
+                                .createdDate(now)
+                                .priority(MEDIUM)
+                                .workUnitAnalysisType(COMPREHENSIVE)
+                                .status(NEW)
+                                .build());
+                    }
 
                     if (--workUnitCountToCreate == 0) {
                         publishNewWorkUnits(newWorkUnits);
