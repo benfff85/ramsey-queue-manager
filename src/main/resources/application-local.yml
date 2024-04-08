@@ -1,6 +1,9 @@
 ramsey:
+  mw:
+    host: "https://api.setminusx.com"
+#    host: "http://localhost:8080"
   client:
-    url: "http://localhost:8080/api/ramsey/clients"
+    url: ${ramsey.mw.host}/api/ramsey/clients
     registration:
       phone-home:
         frequency-in-millis: 60000
@@ -9,13 +12,13 @@ ramsey:
         threshold-in-minutes: 5
 
   graph:
-    url: "http://localhost:8080/api/ramsey/graphs"
+    url: ${ramsey.mw.host}/api/ramsey/graphs
   work-unit:
     queue:
       depth:
         min: 2500
         max: 5000
-      url: "http://localhost:8080/api/ramsey/work-units"
+      url: ${ramsey.mw.host}/api/ramsey/work-units
       analysis-type: COMPREHENSIVE, TARGETED
       frequency-in-millis: 30000
     assignment:
