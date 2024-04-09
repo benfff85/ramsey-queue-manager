@@ -1,8 +1,6 @@
 logging:
   level:
     root: INFO
-  pattern:
-    level: "%clr([%X{X-B3-TraceId}]){blue} %clr(%5p){green}"
 
 spring:
   main:
