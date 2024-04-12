@@ -20,3 +20,24 @@ For each client it then pulls the work units currently assigned, if the count is
 This class is responsible for deregistering clients which have not phoned home for a given duration defined by `ramsey.client.registration.timeout.threshold-in-minutes` (default: 5 minutes).
 
 It pulls all clients and if the phone home is greater than 5 minutes ago it will flip it to inactive status. Likewise when flipping a client to inactive status it will unassign any currently assigned but not yet completed work units.
+
+## Image Build and Deploy
+
+Build the image using SpringBoot defaults
+```bash
+mvn spring-boot:build-image -Dspring-boot.build-image.imageName=benferenchak/ramsey-queue-manager:dev
+````
+
+Publish the image to Dockerhub
+```bash
+docker push benferenchak/ramsey-queue-manager:dev
+```
+
+Start a container using the image
+```bash
+docker run --restart=always \
+  --name=ramsey-queue-manager \
+  -e SPRING_PROFILES_ACTIVE=dev \
+  --cpus=8 \
+  benferenchak/ramsey-queue-manager:dev
+```
