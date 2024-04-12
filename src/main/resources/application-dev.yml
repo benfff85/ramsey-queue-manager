@@ -18,7 +18,7 @@ ramsey:
         min: ${WORK_UNIT_QUEUE_DEPTH_MIN:2500}
         max: ${WORK_UNIT_QUEUE_DEPTH_MAX:5000}
       url: ${ramsey.mw.host}/api/ramsey/work-units
-      analysis-type: COMPREHENSIVE, TARGETED
+      analysis-type: ${WORK_UNIT_ANALYSIS_TYPE:COMPREHENSIVE, TARGETED}
       frequency-in-millis: ${WORK_UNIT_QUEUE_FEEDER_FREQ:30000}
     assignment:
       count-per-client: ${WORK_UNIT_ASSIGNMENT_COUNT:500}
