@@ -21,11 +21,10 @@ import static com.setminusx.ramsey.qm.utility.TimeUtility.now;
 @Component
 public class ClientMonitor {
 
-    @Value("${ramsey.client.registration.timeout.threshold-in-minutes}")
-    private Integer timeoutThreshold;
-
     private final ClientService clientService;
     private final WorkUnitService workUnitService;
+    @Value("${ramsey.client.registration.timeout.threshold-in-minutes}")
+    private Integer timeoutThreshold;
 
 
     public ClientMonitor(ClientService clientService, WorkUnitService workUnitService) {
@@ -43,13 +42,9 @@ public class ClientMonitor {
         for (ClientDto client : activeClients) {
             log.info("Checking if client {} is active", client.getClientId());
             durationInMinutes = Duration.between(client.getLastPhoneHomeDate(), now).toMinutes();
-            log.info("Time since last phone home is {} minutes", durationInMinutes);
+            log.info("Time since last phone home is {} minutes for client {}", durationInMinutes, client.getClientId());
             if (durationInMinutes > timeoutThreshold) {
-                log.info("Threshold breached, marking client as inactive");
-                client.setStatus(INACTIVE);
-                clientService.save(client);
-
-                log.info("Flipping assigned work units back to NEW status");
+                log.info("Threshold breached, flipping assigned work units back to NEW status for client {}", client.getClientId());
                 List<WorkUnitDto> workUnits = workUnitService.getWorkUnitsAssignedToClient(client.getClientId());
                 for (WorkUnitDto workUnit : workUnits) {
                     workUnit.setAssignedDate(null);
@@ -57,9 +52,14 @@ public class ClientMonitor {
                     workUnit.setAssignedClient(null);
                 }
                 workUnitService.save(workUnits);
+
+                log.info("Marking client {} as inactive", client.getClientId());
+                client.setStatus(INACTIVE);
+                clientService.save(client);
             }
+            log.info("Completed inactivity check for client {}", client.getClientId());
         }
-        log.info("Completed check for inactive clients");
+        log.info("Completed inactivity check for all clients");
     }
 
 }
