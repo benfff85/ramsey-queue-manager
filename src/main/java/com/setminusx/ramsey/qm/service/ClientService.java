@@ -50,10 +50,10 @@ public class ClientService {
 
         String url = clientsUri;
         if (!ClientType.ALL.equals(clientType)) {
-            url = UriComponentsBuilder.fromHttpUrl(url).queryParam("clientType", clientType).toUriString();
+            url = UriComponentsBuilder.fromHttpUrl(url).queryParam("type", clientType).toUriString();
         }
         if (!ClientStatus.ALL.equals(clientStatus)) {
-            url = UriComponentsBuilder.fromHttpUrl(url).queryParam("clientStatus", clientStatus).toUriString();
+            url = UriComponentsBuilder.fromHttpUrl(url).queryParam("status", clientStatus).toUriString();
         }
 
         ClientDto[] clients = restTemplate.getForObject(url, ClientDto[].class);
