@@ -1,6 +1,6 @@
 ramsey:
   mw:
-    host: "https://api.setminusx.com"
+    host: "http://ramsey-mw:8080"
   client:
     url: ${ramsey.mw.host}/api/ramsey/clients
     registration:
