@@ -25,19 +25,20 @@ It pulls all clients and if the phone home is greater than 5 minutes ago it will
 
 Build the image using SpringBoot defaults
 ```bash
-mvn spring-boot:build-image -Dspring-boot.build-image.imageName=benferenchak/ramsey-queue-manager:dev
+docker build -t benferenchak/ramsey-queue-manager:develop .
 ````
 
 Publish the image to Dockerhub
 ```bash
-docker push benferenchak/ramsey-queue-manager:dev
+docker push benferenchak/ramsey-queue-manager:develop
 ```
 
 Start a container using the image
 ```bash
 docker run --restart=always \
   --name=ramsey-queue-manager \
+  --network=ramsey-net \
+  --label com.docker.compose.project=ramsey \
   -e SPRING_PROFILES_ACTIVE=dev \
-  --cpus=8 \
-  benferenchak/ramsey-queue-manager:dev
+  benferenchak/ramsey-queue-manager:develop
 ```
