@@ -15,8 +15,6 @@ import java.util.List;
 public class WorkUnit {
 
     private Integer id;
-    private Integer subgraphSize;
-    private Integer vertexCount;
     private Integer baseGraphId;
     private Integer stageId;
     private List<Edge> edgesToFlip;

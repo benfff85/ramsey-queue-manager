@@ -147,8 +147,6 @@ public class QueueFeeder {
                 .baseGraphId(graphId)
                 .stageId(stageId)
                 .edgesToFlip(asList(leftEdge, rightEdge))
-                .vertexCount(ramseyConfig.getVertexCount())
-                .subgraphSize(ramseyConfig.getSubgraphSize())
                 .createdDate(now)
                 .priority(MEDIUM)
                 .workUnitAnalysisType(analysisType)

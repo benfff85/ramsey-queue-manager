@@ -40,8 +40,6 @@ public class ClientRegister {
 
         client = Client.builder()
                 .campaignId(campaignId)
-                .subgraphSize(ramseyConfig.getSubgraphSize())
-                .vertexCount(ramseyConfig.getVertexCount())
                 .type(ClientType.QUEUEMANAGER)
                 .status(ACTIVE)
                 .createdDate(now())

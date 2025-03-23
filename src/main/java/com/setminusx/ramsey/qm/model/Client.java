@@ -14,8 +14,6 @@ import java.time.LocalDateTime;
 public class Client {
 
     private String clientId;
-    private Integer subgraphSize;
-    private Integer vertexCount;
     private Integer campaignId;
     private ClientType type;
     private ClientStatus status;
