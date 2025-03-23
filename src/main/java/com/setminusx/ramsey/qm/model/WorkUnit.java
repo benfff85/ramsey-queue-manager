@@ -1,9 +1,5 @@
-package com.setminusx.ramsey.qm.dto;
+package com.setminusx.ramsey.qm.model;
 
-import com.setminusx.ramsey.qm.model.Edge;
-import com.setminusx.ramsey.qm.model.WorkUnitAnalysisType;
-import com.setminusx.ramsey.qm.model.WorkUnitPriority;
-import com.setminusx.ramsey.qm.model.WorkUnitStatus;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -16,12 +12,13 @@ import java.util.List;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class WorkUnitDto {
+public class WorkUnit {
 
     private Integer id;
     private Integer subgraphSize;
     private Integer vertexCount;
     private Integer baseGraphId;
+    private Integer stageId;
     private List<Edge> edgesToFlip;
     private WorkUnitStatus status;
     private Integer cliqueCount;

@@ -1,24 +1,25 @@
 package com.setminusx.ramsey.qm.controller;
 
-import com.setminusx.ramsey.qm.dto.GraphDto;
-import com.setminusx.ramsey.qm.dto.WorkUnitDto;
+import com.setminusx.ramsey.qm.client.MiddlewareClient;
+import com.setminusx.ramsey.qm.config.RamseyConfig;
+import com.setminusx.ramsey.qm.model.Graph;
+import com.setminusx.ramsey.qm.model.Stage;
+import com.setminusx.ramsey.qm.model.WorkUnit;
 import com.setminusx.ramsey.qm.model.Edge;
 import com.setminusx.ramsey.qm.model.WorkUnitAnalysisType;
-import com.setminusx.ramsey.qm.service.GraphService;
-import com.setminusx.ramsey.qm.service.WorkUnitService;
+import com.setminusx.ramsey.qm.model.WorkUnitStatus;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 import static com.setminusx.ramsey.qm.model.WorkUnitAnalysisType.*;
 import static com.setminusx.ramsey.qm.model.WorkUnitPriority.MEDIUM;
-import static com.setminusx.ramsey.qm.model.WorkUnitStatus.CANCELLED;
 import static com.setminusx.ramsey.qm.model.WorkUnitStatus.NEW;
 import static com.setminusx.ramsey.qm.utility.TimeUtility.now;
 import static java.util.Arrays.asList;
@@ -29,48 +30,31 @@ import static org.springframework.util.CollectionUtils.isEmpty;
 @Component
 public class QueueFeeder {
 
-    @Value("${ramsey.work-unit.queue.depth.min}")
-    private Integer queueDepthMin;
-
-    @Value("${ramsey.work-unit.queue.depth.max}")
-    private Integer queueDepthMax;
-
-    @Value("${ramsey.work-unit.queue.analysis-type}")
-    private List<WorkUnitAnalysisType> analysisType;
-
-    @Value("${ramsey.vertex-count}")
-    private Integer vertexCount;
-
-    @Value("${ramsey.subgraph-size}")
-    private Integer subgraphSize;
-
-    private GraphDto graph;
+    private final MiddlewareClient middlewareClient;
+    private final RamseyConfig ramseyConfig;
+    private Integer graphId;
     private List<Edge> edges;
 
-    private final GraphService graphService;
-    private final WorkUnitService workUnitService;
-
-    public QueueFeeder(GraphService graphService, WorkUnitService workUnitService) {
-        this.graphService = graphService;
-        this.workUnitService = workUnitService;
+    public QueueFeeder(MiddlewareClient middlewareClient, RamseyConfig ramseyConfig) {
+        this.middlewareClient = middlewareClient;
+        this.ramseyConfig = ramseyConfig;
     }
 
     @PostConstruct
     private void init() {
         log.info("Initializing edge list");
         edges = new ArrayList<>();
-        for (int i = 0; i < vertexCount; i++) {
-            for (int j = i + 1; j < vertexCount; j++) {
+        for (int i = 0; i < ramseyConfig.getVertexCount(); i++) {
+            for (int j = i + 1; j < ramseyConfig.getVertexCount(); j++) {
                 edges.add(Edge.builder().vertexOne(i).vertexTwo(j).build());
             }
         }
-        applyGraphAndEdgeColoring(graphService.getMin());
     }
 
 
-    private void applyGraphAndEdgeColoring(GraphDto graph) {
-        log.info("Setting graph to graph id: {}", graph.getGraphId());
-        this.graph = graph;
+    private void applyGraphAndEdgeColoring(Graph graph) {
+        log.info("Setting graph id to: {}", graph.getGraphId());
+        graphId = graph.getGraphId();
         log.info("Initializing edge coloring");
         for (int i = 0; i < graph.getEdgeData().length(); i++) {
             edges.get(i).setColoring(graph.getEdgeData().charAt(i));
@@ -83,27 +67,38 @@ public class QueueFeeder {
 
         log.info("Processing feedQueue");
 
-        GraphDto currentMinGraph = graphService.getMin();
-        List<WorkUnitDto> workUnits = workUnitService.getUnassignedWorkUnits(50000);
-        if (!graph.getGraphId().equals(currentMinGraph.getGraphId())) {
-            cancelAllOpenWorkUnits(workUnits);
-            applyGraphAndEdgeColoring(currentMinGraph);
-            workUnits.clear();
+        // Grab the active stage for the campaign
+        List<Stage> stages = middlewareClient.getStagesByCampaignIdAndStatus(ramseyConfig.getCampaignId(), Stage.Status.ACTIVE);
+        if (!(stages.size() == 1)) {
+            throw new RuntimeException("Expected 1 active stage, found " + stages.size());
         }
+        Stage stage = stages.getFirst();
 
-        if (workUnits.size() >= queueDepthMin) {
+        // Get count of unassigned work units for stage
+        int unassignedWorkUnitCount = middlewareClient.getWorkUnitsByStageIdAndStatus(stage.getStageId(), WorkUnitStatus.NEW, ramseyConfig.getWorkUnit().getQueue().getDepth().getMin()).size();
+
+        // Exit if queue is already sufficiently deep
+        if (unassignedWorkUnitCount >= ramseyConfig.getWorkUnit().getQueue().getDepth().getMin()) {
             log.info("No work units to create, exiting");
             return;
         }
 
-        int workUnitCountToCreate = queueDepthMax - workUnits.size();
+        // Determine how many work units to create
+        int workUnitCountToCreate = ramseyConfig.getWorkUnit().getQueue().getDepth().getMax() - unassignedWorkUnitCount;
         log.info("Work units to create: {}", workUnitCountToCreate);
 
-        WorkUnitDto lastWorkUnit = workUnitService.getLast(graph.getGraphId());
+        // Get the graph for the active stage
+        if (!Objects.equals(graphId, stage.getBaseGraphId())) {
+            Graph graph = middlewareClient.getGraphById(stage.getBaseGraphId());
+            applyGraphAndEdgeColoring(graph);
+        }
+
+        // Generate new work units
         int leftEdgeIndex = 0;
         int rightEdgeIndex = 0;
-        if (nonNull(lastWorkUnit)) {
+        if (nonNull(stage.getLatestWorkUnitId())) {
             log.info("Getting edge data from last work unit");
+            WorkUnit lastWorkUnit = middlewareClient.getWorkUnitById(stage.getLatestWorkUnitId());
             leftEdgeIndex = edges.indexOf(lastWorkUnit.getEdgesToFlip().get(0));
             rightEdgeIndex = edges.indexOf(lastWorkUnit.getEdgesToFlip().get(1));
         }
@@ -111,25 +106,26 @@ public class QueueFeeder {
         log.info("Right edge index: {}", rightEdgeIndex);
 
         log.info("Creating work units...");
-        List<WorkUnitDto> newWorkUnits = new ArrayList<>();
+        List<WorkUnit> newWorkUnits = new ArrayList<>();
         LocalDateTime now = now();
 
-        for (int i = leftEdgeIndex; i < graph.getEdgeData().length() - 1; i++) {
+        List<WorkUnitAnalysisType> analysisType = ramseyConfig.getWorkUnit().getQueue().getAnalysisType();
+        for (int i = leftEdgeIndex; i < edges.size() - 1; i++) {
             Edge leftEdge = edges.get(i);
-            for (int j = rightEdgeIndex + 1; j < graph.getEdgeData().length(); j++) {
+            for (int j = rightEdgeIndex + 1; j < edges.size(); j++) {
                 Edge rightEdge = edges.get(j);
                 if (leftEdge.getColoring() != rightEdge.getColoring()) {
-                    if(analysisType.contains(NAIVE)) {
-                        createWorkUnit(newWorkUnits, leftEdge, rightEdge, now, NAIVE);
+                    if (analysisType.contains(NAIVE)) {
+                        createWorkUnit(newWorkUnits, leftEdge, rightEdge, now, NAIVE, stage.getStageId());
                     }
-                    if(analysisType.contains(COMPREHENSIVE)) {
-                        createWorkUnit(newWorkUnits, leftEdge, rightEdge, now, COMPREHENSIVE);
+                    if (analysisType.contains(COMPREHENSIVE)) {
+                        createWorkUnit(newWorkUnits, leftEdge, rightEdge, now, COMPREHENSIVE, stage.getStageId());
                     }
-                    if(analysisType.contains(TARGETED)) {
-                        createWorkUnit(newWorkUnits, leftEdge, rightEdge, now, TARGETED);
+                    if (analysisType.contains(TARGETED)) {
+                        createWorkUnit(newWorkUnits, leftEdge, rightEdge, now, TARGETED, stage.getStageId());
                     }
                     if (--workUnitCountToCreate == 0) {
-                        publishNewWorkUnits(newWorkUnits);
+                        publishNewWorkUnits(newWorkUnits, stage);
                         return;
                     }
                 }
@@ -139,19 +135,20 @@ public class QueueFeeder {
 
         if (!isEmpty(newWorkUnits)) {
             log.info("Publishing final batch of new work units for this graph");
-            publishNewWorkUnits(newWorkUnits);
+            publishNewWorkUnits(newWorkUnits, stage);
             return;
         }
 
-        log.warn("No work units left to create for graph id {}", graph.getGraphId());
+        log.warn("No work units left to create for graph id {}", graphId);
     }
 
-    private void createWorkUnit(List<WorkUnitDto> newWorkUnits, Edge leftEdge, Edge rightEdge, LocalDateTime now, WorkUnitAnalysisType analysisType) {
-        newWorkUnits.add(WorkUnitDto.builder()
-                .baseGraphId(graph.getGraphId())
+    private void createWorkUnit(List<WorkUnit> newWorkUnits, Edge leftEdge, Edge rightEdge, LocalDateTime now, WorkUnitAnalysisType analysisType, int stageId) {
+        newWorkUnits.add(WorkUnit.builder()
+                .baseGraphId(graphId)
+                .stageId(stageId)
                 .edgesToFlip(asList(leftEdge, rightEdge))
-                .vertexCount(vertexCount)
-                .subgraphSize(subgraphSize)
+                .vertexCount(ramseyConfig.getVertexCount())
+                .subgraphSize(ramseyConfig.getSubgraphSize())
                 .createdDate(now)
                 .priority(MEDIUM)
                 .workUnitAnalysisType(analysisType)
@@ -159,17 +156,14 @@ public class QueueFeeder {
                 .build());
     }
 
-    private void publishNewWorkUnits(List<WorkUnitDto> newWorkUnits) {
+    private void publishNewWorkUnits(List<WorkUnit> newWorkUnits, Stage stage) {
         log.info("Work units created: {}", newWorkUnits.size());
         log.info("Publishing work units");
-        workUnitService.save(newWorkUnits);
+        List<WorkUnit> createdWorkUnits = middlewareClient.createWorkUnits(newWorkUnits);
+        stage.setLatestWorkUnitId(createdWorkUnits.getLast().getId());
+        stage.setUpdatedDate(now());
+        middlewareClient.updateStage(stage);
         log.info("Completed feedQueue");
-    }
-
-    private void cancelAllOpenWorkUnits(List<WorkUnitDto> workUnits) {
-        log.info("Cancelling all open work units");
-        workUnits.forEach(wu -> wu.setStatus(CANCELLED));
-        workUnitService.save(workUnits);
     }
 
 }
