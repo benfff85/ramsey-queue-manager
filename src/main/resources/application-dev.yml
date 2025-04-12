@@ -23,3 +23,7 @@ ramsey:
     assignment:
       count-per-client: ${WORK_UNIT_ASSIGNMENT_COUNT:500}
       frequency-in-millis: ${WORK_UNIT_ASSIGNMENT_FREQ:30000}
+  campaign:
+    url: ${ramsey.mw.host}/api/ramsey/campaigns
+  stage:
+    url: ${ramsey.mw.host}/api/ramsey/stages

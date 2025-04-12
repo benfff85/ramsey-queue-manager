@@ -1,7 +1,6 @@
 ramsey:
   mw:
-#    host: "https://api.setminusx.com"
-    host: "http://localhost:4040"
+    host: "http://localhost:36000"
   client:
     url: ${ramsey.mw.host}/api/ramsey/clients
     registration:
@@ -10,7 +9,6 @@ ramsey:
       timeout:
         frequency-in-millis: 60000
         threshold-in-minutes: 5
-
   graph:
     url: ${ramsey.mw.host}/api/ramsey/graphs
   work-unit:
@@ -19,8 +17,12 @@ ramsey:
         min: 2500
         max: 5000
       url: ${ramsey.mw.host}/api/ramsey/work-units
-      analysis-type: COMPREHENSIVE, TARGETED
+      analysis-type: TARGETED
       frequency-in-millis: 30000
     assignment:
       count-per-client: 500
       frequency-in-millis: 30000
+  campaign:
+    url: ${ramsey.mw.host}/api/ramsey/campaigns
+  stage:
+    url: ${ramsey.mw.host}/api/ramsey/stages

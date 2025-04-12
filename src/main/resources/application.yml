@@ -7,5 +7,4 @@ spring:
     web-application-type: none
 
 ramsey:
-  vertex-count: 288
-  subgraph-size: 8
+  campaign-id: 1

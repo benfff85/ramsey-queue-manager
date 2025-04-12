@@ -1,11 +1,11 @@
-package com.setminusx.ramsey.qm.dto;
+package com.setminusx.ramsey.qm.model;
 
 import lombok.Data;
 
 import java.util.Date;
 
 @Data
-public class GraphDto {
+public class Graph {
 
     private Integer graphId;
     private Integer subgraphSize;
