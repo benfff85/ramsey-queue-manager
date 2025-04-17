@@ -75,7 +75,7 @@ public class QueueFeeder {
         Stage stage = stages.getFirst();
 
         // Get count of unassigned work units for stage
-        int unassignedWorkUnitCount = middlewareClient.getWorkUnitsByStageIdAndStatus(stage.getStageId(), WorkUnitStatus.NEW, ramseyConfig.getWorkUnit().getQueue().getDepth().getMin()).size();
+        int unassignedWorkUnitCount = middlewareClient.getWorkUnitCountByStageIdAndStatus(stage.getStageId(), WorkUnitStatus.NEW);
 
         // Exit if queue is already sufficiently deep
         if (unassignedWorkUnitCount >= ramseyConfig.getWorkUnit().getQueue().getDepth().getMin()) {
