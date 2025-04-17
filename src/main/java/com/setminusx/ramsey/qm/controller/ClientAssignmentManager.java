@@ -45,11 +45,10 @@ public class ClientAssignmentManager {
 
         List<Client> clients = middlewareClient.getClientsByTypeAndStatusAndCampaign(CLIQUECHECKER, ACTIVE, ramseyConfig.getCampaignId());
         for (Client client : clients) {
-            List<WorkUnit> workUnits = middlewareClient.getWorkUnitsByAssignedClientAndStatus(client.getClientId(), WorkUnitStatus.ASSIGNED, workUnitCountPerClient);
-
-            if (workUnits.size() < workUnitCountPerClient) {
+            int workUnitCount = middlewareClient.getWorkUnitCountByClientIdAndStatus(client.getClientId(), WorkUnitStatus.ASSIGNED);
+            if (workUnitCount < workUnitCountPerClient) {
                 assignedDate = now();
-                List<WorkUnit> workUnitsToAssign = middlewareClient.getWorkUnitsByStageIdAndStatus(stage.getStageId(), WorkUnitStatus.NEW, workUnitCountPerClient - workUnits.size());
+                List<WorkUnit> workUnitsToAssign = middlewareClient.getWorkUnitsByStageIdAndStatus(stage.getStageId(), WorkUnitStatus.NEW, workUnitCountPerClient - workUnitCount);
                 for (WorkUnit workUnitToAssign : workUnitsToAssign) {
                     workUnitToAssign.setAssignedClient(client.getClientId());
                     workUnitToAssign.setAssignedDate(assignedDate);

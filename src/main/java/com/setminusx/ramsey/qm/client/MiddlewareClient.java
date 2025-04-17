@@ -147,6 +147,24 @@ public class MiddlewareClient {
         return count != null ? count : 0;
     }
 
+    public int getWorkUnitCountByClientIdAndStatus(String clientId, WorkUnitStatus status) {
+        Mono<Integer> countMono = graphQlClient.document("""
+            query($clientId: String!, $statuses: [WorkUnitStatus!]) {
+                summary {
+                    clientSummary(clientId: $clientId, workUnitStatusList: $statuses) {
+                        workUnitCount
+                    }
+                }
+            }
+        """)
+                .variable("clientId", clientId)
+                .variable("statuses", java.util.List.of(status))
+                .retrieve("summary.clientSummary.workUnitCount")
+                .toEntity(Integer.class);
+        Integer count = countMono.block(); // Blocking for imperative style
+        return count != null ? count : 0;
+    }
+
     ////////////////////////////////////////////////////////////////////////////////
     //                                Graph                                   //
     ////////////////////////////////////////////////////////////////////////////////
