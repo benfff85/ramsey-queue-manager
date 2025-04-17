@@ -1,6 +1,10 @@
 logging:
   level:
     root: INFO
+  pattern:
+    dateformat: yyyy-MM-dd HH:mm:ss.SSS
+    console: "%d{${logging.pattern.dateformat}} %clr([%X{traceId:-},%X{spanId:-}]){blue} %clr(%5p){green} %clr(${PID:-}){magenta} %clr([%15.15t]){faint} %clr(%-40.40logger{39}){cyan} %clr(:){faint} %m%n%wEx"
+
 
 spring:
   main:

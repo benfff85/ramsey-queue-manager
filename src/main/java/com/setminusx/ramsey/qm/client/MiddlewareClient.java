@@ -2,9 +2,11 @@ package com.setminusx.ramsey.qm.client;
 
 import com.setminusx.ramsey.qm.config.RamseyConfig;
 import com.setminusx.ramsey.qm.model.*;
+import org.springframework.graphql.client.GraphQlClient;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
+import reactor.core.publisher.Mono;
 
 import java.util.*;
 
@@ -17,15 +19,17 @@ public class MiddlewareClient {
     private final String workUnitUrl;
     private final String graphUrl;
     private final RestTemplate restTemplate;
+    private final GraphQlClient graphQlClient;
 
 
-    public MiddlewareClient(RamseyConfig ramseyConfig, RestTemplate restTemplate) {
+    public MiddlewareClient(RamseyConfig ramseyConfig, RestTemplate restTemplate, GraphQlClient graphQlClient) {
         this.clientUrl = ramseyConfig.getClient().getUrl();
         this.campaignUrl = ramseyConfig.getCampaign().getUrl();
         this.stageUrl = ramseyConfig.getStage().getUrl();
         this.workUnitUrl = ramseyConfig.getWorkUnit().getQueue().getUrl();
         this.graphUrl = ramseyConfig.getGraph().getUrl();
         this.restTemplate = restTemplate;
+        this.graphQlClient = graphQlClient;
     }
 
     ////////////////////////////////////////////////////////////////////////////////
@@ -122,6 +126,43 @@ public class MiddlewareClient {
 
     public void updateWorkUnits(List<WorkUnit> workUnits) {
         restTemplate.put(workUnitUrl, workUnits);
+    }
+
+    // Get work unit count by stage and status via GraphQL summary endpoint (using GraphQlClient)
+    public int getWorkUnitCountByStageIdAndStatus(Integer stageId, WorkUnitStatus status) {
+        Mono<Integer> countMono = graphQlClient.document("""
+            query($stageId: Int!, $statuses: [WorkUnitStatus!]) {
+                summary {
+                    stageSummary(stageId: $stageId, workUnitStatusList: $statuses) {
+                        workUnitCount
+                    }
+                }
+            }
+        """)
+            .variable("stageId", stageId)
+            .variable("statuses", java.util.List.of(status))
+            .retrieve("summary.stageSummary.workUnitCount")
+            .toEntity(Integer.class);
+        Integer count = countMono.block(); // Blocking for imperative style
+        return count != null ? count : 0;
+    }
+
+    public int getWorkUnitCountByClientIdAndStatus(String clientId, WorkUnitStatus status) {
+        Mono<Integer> countMono = graphQlClient.document("""
+            query($clientId: String!, $statuses: [WorkUnitStatus!]) {
+                summary {
+                    clientSummary(clientId: $clientId, workUnitStatusList: $statuses) {
+                        workUnitCount
+                    }
+                }
+            }
+        """)
+                .variable("clientId", clientId)
+                .variable("statuses", java.util.List.of(status))
+                .retrieve("summary.clientSummary.workUnitCount")
+                .toEntity(Integer.class);
+        Integer count = countMono.block(); // Blocking for imperative style
+        return count != null ? count : 0;
     }
 
     ////////////////////////////////////////////////////////////////////////////////
