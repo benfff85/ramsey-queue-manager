@@ -124,8 +124,14 @@ public class QueueFeeder {
                     if (analysisType.contains(TARGETED)) {
                         createWorkUnit(newWorkUnits, leftEdge, rightEdge, now, TARGETED, stage.getStageId());
                     }
-                    if (--workUnitCountToCreate == 0) {
+                    if (newWorkUnits.size() >= ramseyConfig.getWorkUnit().getQueue().getDepth().getPublishBatchSize()) {
                         publishNewWorkUnits(newWorkUnits, stage);
+                        newWorkUnits.clear();
+                    }
+                    if (--workUnitCountToCreate == 0) {
+                        if (!newWorkUnits.isEmpty()) {
+                            publishNewWorkUnits(newWorkUnits, stage);
+                        }
                         return;
                     }
                 }
