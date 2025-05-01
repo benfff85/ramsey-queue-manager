@@ -74,6 +74,7 @@ public class RamseyConfig {
             public static class Depth {
                 private Integer min;
                 private Integer max;
+                private Integer publishBatchSize;
             }
         }
 
