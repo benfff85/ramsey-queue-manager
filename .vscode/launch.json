@@ -1,0 +1,15 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "java",
+            "name": "Spring Boot-ramsey-queue-manager-local",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "mainClass": "com.setminusx.ramsey.qm.Application",
+            "projectName": "ramsey-queue-manager",
+            "args": "",
+            "vmArgs": "-Dspring.profiles.active=local -XX:+UseZGC -XX:+UseCompactObjectHeaders"
+        }
+    ]
+}

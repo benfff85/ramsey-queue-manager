@@ -12,6 +12,6 @@ public class Edge {
     private Integer vertexTwo;
 
     @EqualsAndHashCode.Exclude
-    private char coloring;
+    private Character coloring;
 
 }

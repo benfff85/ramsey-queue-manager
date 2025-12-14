@@ -1,6 +1,6 @@
 ramsey:
   mw:
-    host: "http://localhost:4040"
+    host: "http://localhost:36000"
   client:
     url: ${ramsey.mw.host}/api/ramsey/clients
     registration:
