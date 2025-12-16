@@ -24,7 +24,7 @@ WORKDIR /app
 COPY --from=build /app/target/ramsey-queue-manager-*.jar /app/ramsey-queue-manager.jar
 
 # JVM memory and container awareness settings
-ENV JAVA_OPTS="-XX:InitialRAMPercentage=75.0 -XX:MaxRAMPercentage=75.0 -XX:+UseZGC -XX:+UseCompactObjectHeaders"
+ENV JAVA_OPTS="-XX:InitialRAMPercentage=75.0 -XX:MaxRAMPercentage=75.0 -XX:+UseZGC -XX:+UseCompactObjectHeaders --enable-native-access=ALL-UNNAMED"
 
 # Add a non-root user and switch to it
 RUN groupadd -r appgroup && useradd -r -g appgroup appuser
