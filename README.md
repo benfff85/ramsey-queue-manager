@@ -1,44 +1,83 @@
 # Ramsey Queue Manager
-Whereas the middleware is primarily responsible simply for fetching and persisting data, this queue manager is responsible for the management of the system state. This is comprised of the following:
 
-## Queue Feeder
+This service manages the work queue for the Ramsey distributed computing system. It pushes work items to a Redis queue for workers to consume.
 
-This class runs at an interval defined by `ramsey.work-unit.queue.frequency-in-millis` (default: 30 seconds) and ensures there are sufficient work units queued up.
+## Architecture
 
-If the graphId of the minimum graph has changed cancel all open WorkUnits. 
+```
+┌─────────────────┐     ┌───────────┐     ┌─────────────┐
+│  Queue Manager  │────▶│   Redis   │◀────│   Workers   │
+│  (QueueFeeder)  │     │   Queue   │     │ (pop work)  │
+└─────────────────┘     └───────────┘     └─────────────┘
+```
 
-Pull all unassigned work units and check if the number is less than the minimum queue depth `ramsey.work-unit.queue.depth.min` (default: 2500), if so, create enough work units to hit the max queue depth `ramsey.work-unit.queue.depth.min` (default: 5000).
+## Components
 
-## Client Assignment Manager
+### Queue Feeder
 
-This class is responsible for assigning work units to clients. It begins by pulling all active cliquechecker clients. 
+Runs at an interval defined by `ramsey.work-unit.queue.frequency-in-millis` (default: 30 seconds).
 
-For each client it then pulls the work units currently assigned, if the count is less than the desired count defined by `ramsey.work-unit.assignment.count-per-client` (default: 500) then pull unassigned work units and assign them to the client such that the count reaches the desired number of work units.
+- Checks Redis queue depth using O(1) `LLEN` operation
+- If depth < `ramsey.work-unit.queue.depth.min`, generates new work items
+- Pushes work items to Redis in batches using `LPUSH`
+- Workers consume from the other end using `RPOP` (FIFO ordering)
 
-## Client Monitor
+**Configuration:**
+- `WORK_UNIT_QUEUE_DEPTH_MIN` - Minimum queue depth before refilling (default: 4M)
+- `WORK_UNIT_QUEUE_DEPTH_MAX` - Target queue depth when refilling (default: 8M)
+- `WORK_UNIT_ANALYSIS_TYPE` - Type of analysis: TARGETED, COMPREHENSIVE, or NAIVE
 
-This class is responsible for deregistering clients which have not phoned home for a given duration defined by `ramsey.client.registration.timeout.threshold-in-minutes` (default: 5 minutes).
+### Client Monitor
 
-It pulls all clients and if the phone home is greater than 5 minutes ago it will flip it to inactive status. Likewise when flipping a client to inactive status it will unassign any currently assigned but not yet completed work units.
+Monitors client health and marks inactive clients.
+
+- Checks all active clients' last phone home time
+- Marks clients as INACTIVE if they haven't phoned home within threshold
+- With Redis queue, no work unit reassignment is needed (workers pop directly)
+
+**Configuration:**
+- `ramsey.client.registration.timeout.threshold-in-minutes` (default: 5 minutes)
+
+### Client Register
+
+Handles this queue manager instance's registration with the middleware.
+
+## Redis Queue Format
+
+Work items are stored as JSON in a Redis List with key `work_queue:{stageId}`:
+
+```json
+{
+  "baseGraphId": 1,
+  "stageId": 6,
+  "edgesToFlip": [{"vertexOne": 12, "vertexTwo": 45}, {"vertexOne": 67, "vertexTwo": 89}],
+  "analysisType": "TARGETED"
+}
+```
+
+## Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `REDIS_HOST` | Redis server hostname | `localhost` |
+| `REDIS_PORT` | Redis server port | `6379` |
+| `WORK_UNIT_QUEUE_DEPTH_MIN` | Min queue depth | `4000000` |
+| `WORK_UNIT_QUEUE_DEPTH_MAX` | Max queue depth | `8000000` |
+| `WORK_UNIT_ANALYSIS_TYPE` | Analysis type | `TARGETED` |
 
 ## Image Build and Deploy
 
-Build the image using SpringBoot defaults
+Build the image:
 ```bash
 docker build -t benferenchak/ramsey-queue-manager:develop .
-````
+```
 
-Publish the image to Dockerhub
+Publish to Dockerhub:
 ```bash
 docker push benferenchak/ramsey-queue-manager:develop
 ```
 
-Start a container using the image
+Start with Docker Compose (see `ramsey-mw/docker/ramsey-compose.yml`):
 ```bash
-docker run --restart=always \
-  --name=ramsey-queue-manager \
-  --network=ramsey-net \
-  --label com.docker.compose.project=ramsey \
-  -e SPRING_PROFILES_ACTIVE=dev \
-  benferenchak/ramsey-queue-manager:develop
+docker compose -f ./docker/ramsey-compose.yml -p ramsey up --scale ramsey-queue-manager=1 -d
 ```

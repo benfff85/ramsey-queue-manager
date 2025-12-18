@@ -24,7 +24,6 @@ public class RamseyConfig {
     private Campaign campaign;
     private Stage stage;
 
-
     @Data
     public static class Mw {
         private String host;
@@ -61,7 +60,6 @@ public class RamseyConfig {
     @Data
     public static class WorkUnit {
         private Queue queue;
-        private Assignment assignment;
 
         @Data
         public static class Queue {
@@ -76,12 +74,6 @@ public class RamseyConfig {
                 private Integer max;
                 private Integer publishBatchSize;
             }
-        }
-
-        @Data
-        public static class Assignment {
-            private Integer countPerClient;
-            private Long frequencyInMillis;
         }
     }
 
