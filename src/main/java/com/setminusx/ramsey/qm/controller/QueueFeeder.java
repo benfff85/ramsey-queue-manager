@@ -34,6 +34,7 @@ public class QueueFeeder {
     // Track position for resuming work generation
     private int lastLeftEdgeIndex = 0;
     private int lastRightEdgeIndex = 0;
+    private boolean allWorkCompleted = false;
 
     public QueueFeeder(MiddlewareClient middlewareClient, RedisQueueService redisQueueService,
             RamseyConfig ramseyConfig) {
@@ -63,6 +64,7 @@ public class QueueFeeder {
         // Reset position when graph changes
         lastLeftEdgeIndex = 0;
         lastRightEdgeIndex = 0;
+        allWorkCompleted = false;
     }
 
     @Scheduled(fixedRateString = "${ramsey.work-unit.queue.frequency-in-millis}")
@@ -85,6 +87,12 @@ public class QueueFeeder {
         if (queueDepth >= ramseyConfig.getWorkUnit().getQueue().getDepth().getMin()) {
             log.info("Queue depth {} >= min {}, no work units to create", queueDepth,
                     ramseyConfig.getWorkUnit().getQueue().getDepth().getMin());
+            return;
+        }
+
+        // Check if all work has already been generated for this graph
+        if (allWorkCompleted) {
+            log.info("All work units already generated for graph {}, waiting for next stage", graphId);
             return;
         }
 
@@ -153,7 +161,9 @@ public class QueueFeeder {
             publishToRedis(newWorkItems, stage.getStageId());
         }
 
-        log.warn("No more edge combinations available for graph id {}", graphId);
+        // Mark all work as completed to prevent regeneration
+        allWorkCompleted = true;
+        log.info("All edge combinations generated for graph id {}. Total work complete.", graphId);
     }
 
     private void publishToRedis(List<WorkQueueItem> items, Integer stageId) {
