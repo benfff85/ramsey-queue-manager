@@ -33,9 +33,8 @@ USER appuser
 # Expose the port on which the app will run
 EXPOSE 8080
 
-# Add a health check
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+# No HTTP health check - queue-manager has no web server (web-application-type: none)
+# Docker will monitor process liveness automatically
 
 # Specify the command to run the application with JAVA_OPTS from the environment
 ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar /app/ramsey-queue-manager.jar"]

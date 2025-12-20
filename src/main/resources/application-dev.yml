@@ -21,10 +21,13 @@ ramsey:
       url: ${ramsey.mw.host}/api/ramsey/work-units
       analysis-type: ${WORK_UNIT_ANALYSIS_TYPE:TARGETED} # COMPREHENSIVE, TARGETED
       frequency-in-millis: ${WORK_UNIT_QUEUE_FEEDER_FREQ:30000}
-    assignment:
-      count-per-client: ${WORK_UNIT_ASSIGNMENT_COUNT:250000}
-      frequency-in-millis: ${WORK_UNIT_ASSIGNMENT_FREQ:30000}
   campaign:
     url: ${ramsey.mw.host}/api/ramsey/campaigns
   stage:
     url: ${ramsey.mw.host}/api/ramsey/stages
+
+spring:
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
