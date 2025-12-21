@@ -21,7 +21,6 @@ public class MiddlewareClient {
     private final RestTemplate restTemplate;
     private final GraphQlClient graphQlClient;
 
-
     public MiddlewareClient(RamseyConfig ramseyConfig, RestTemplate restTemplate, GraphQlClient graphQlClient) {
         this.clientUrl = ramseyConfig.getClient().getUrl();
         this.campaignUrl = ramseyConfig.getCampaign().getUrl();
@@ -33,7 +32,7 @@ public class MiddlewareClient {
     }
 
     ////////////////////////////////////////////////////////////////////////////////
-    //                                Client                                   //
+    // Client //
     ////////////////////////////////////////////////////////////////////////////////
     public Client createClient(Client client) {
         return restTemplate.postForObject(clientUrl, client, Client.class);
@@ -57,14 +56,14 @@ public class MiddlewareClient {
     }
 
     ////////////////////////////////////////////////////////////////////////////////
-    //                                Campaign                                   //
+    // Campaign //
     ////////////////////////////////////////////////////////////////////////////////
     public Campaign getCampaign(Integer campaignId) {
         return restTemplate.getForObject(campaignUrl + "/" + campaignId, Campaign.class);
     }
 
     ////////////////////////////////////////////////////////////////////////////////
-    //                                Stage                                     //
+    // Stage //
     ////////////////////////////////////////////////////////////////////////////////
     public List<Stage> getStagesByCampaignIdAndStatus(Integer campaignId, Stage.Status status) {
 
@@ -84,7 +83,7 @@ public class MiddlewareClient {
     }
 
     ////////////////////////////////////////////////////////////////////////////////
-    //                                Work Unit                                   //
+    // Work Unit //
     ////////////////////////////////////////////////////////////////////////////////
     public List<WorkUnit> getWorkUnitsByStageIdAndStatus(Integer stageId, WorkUnitStatus status, Integer pageSize) {
 
@@ -100,7 +99,8 @@ public class MiddlewareClient {
 
     }
 
-    public List<WorkUnit> getWorkUnitsByAssignedClientAndStatus(String clientId, WorkUnitStatus status, Integer pageSize) {
+    public List<WorkUnit> getWorkUnitsByAssignedClientAndStatus(String clientId, WorkUnitStatus status,
+            Integer pageSize) {
 
         String getWorkUnitUri = UriComponentsBuilder.fromUriString(workUnitUrl)
                 .queryParam("assignedClientId", clientId)
@@ -128,35 +128,36 @@ public class MiddlewareClient {
         restTemplate.put(workUnitUrl, workUnits);
     }
 
-    // Get work unit count by stage and status via GraphQL summary endpoint (using GraphQlClient)
+    // Get work unit count by stage and status via GraphQL summary endpoint (using
+    // GraphQlClient)
     public int getWorkUnitCountByStageIdAndStatus(Integer stageId, WorkUnitStatus status) {
         Mono<Integer> countMono = graphQlClient.document("""
-            query($stageId: Int!, $statuses: [WorkUnitStatus!]) {
-                summary {
-                    stageSummary(stageId: $stageId, workUnitStatusList: $statuses) {
-                        workUnitCount
+                    query($stageId: Int!, $statuses: [WorkUnitStatus!]) {
+                        summary {
+                            stageSummary(stageId: $stageId, workUnitStatusList: $statuses) {
+                                workUnitCount
+                            }
+                        }
                     }
-                }
-            }
-        """)
-            .variable("stageId", stageId)
-            .variable("statuses", java.util.List.of(status))
-            .retrieve("summary.stageSummary.workUnitCount")
-            .toEntity(Integer.class);
+                """)
+                .variable("stageId", stageId)
+                .variable("statuses", java.util.List.of(status))
+                .retrieve("summary.stageSummary.workUnitCount")
+                .toEntity(Integer.class);
         Integer count = countMono.block(); // Blocking for imperative style
         return count != null ? count : 0;
     }
 
     public int getWorkUnitCountByClientIdAndStatus(String clientId, WorkUnitStatus status) {
         Mono<Integer> countMono = graphQlClient.document("""
-            query($clientId: String!, $statuses: [WorkUnitStatus!]) {
-                summary {
-                    clientSummary(clientId: $clientId, workUnitStatusList: $statuses) {
-                        workUnitCount
+                    query($clientId: String!, $statuses: [WorkUnitStatus!]) {
+                        summary {
+                            clientSummary(clientId: $clientId, workUnitStatusList: $statuses) {
+                                workUnitCount
+                            }
+                        }
                     }
-                }
-            }
-        """)
+                """)
                 .variable("clientId", clientId)
                 .variable("statuses", java.util.List.of(status))
                 .retrieve("summary.clientSummary.workUnitCount")
@@ -166,10 +167,38 @@ public class MiddlewareClient {
     }
 
     ////////////////////////////////////////////////////////////////////////////////
-    //                                Graph                                   //
+    // Graph //
     ////////////////////////////////////////////////////////////////////////////////
     public Graph getGraphById(Integer id) {
         return restTemplate.getForObject(graphUrl + "/" + id, Graph.class);
+    }
+
+    /**
+     * Get a derived graph (computed but not saved).
+     * 
+     * @param baseGraphId The base graph to derive from
+     * @param edgesToFlip String format "{{v1:v2},{v3:v4}}"
+     * @return Derived graph (graphId will be null)
+     */
+    public Graph getDerivedGraph(Integer baseGraphId, String edgesToFlip) {
+        String uri = UriComponentsBuilder.fromUriString(graphUrl + "/" + baseGraphId)
+                .queryParam("edgesToFlip", edgesToFlip)
+                .toUriString();
+        return restTemplate.getForObject(uri, Graph.class);
+    }
+
+    /**
+     * Create/save a graph to the database.
+     */
+    public Graph createGraph(Graph graph) {
+        return restTemplate.postForObject(graphUrl, graph, Graph.class);
+    }
+
+    /**
+     * Create a new stage.
+     */
+    public Stage createStage(Stage stage) {
+        return restTemplate.postForObject(stageUrl, stage, Stage.class);
     }
 
 }
