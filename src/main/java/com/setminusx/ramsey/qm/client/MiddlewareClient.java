@@ -181,9 +181,12 @@ public class MiddlewareClient {
      * @return Derived graph (graphId will be null)
      */
     public Graph getDerivedGraph(Integer baseGraphId, String edgesToFlip) {
-        String uri = UriComponentsBuilder.fromUriString(graphUrl + "/" + baseGraphId)
+        // Use build().toUri() to properly encode, then pass URI to avoid
+        // double-encoding
+        java.net.URI uri = UriComponentsBuilder.fromUriString(graphUrl + "/" + baseGraphId)
                 .queryParam("edgesToFlip", edgesToFlip)
-                .toUriString();
+                .build()
+                .toUri();
         return restTemplate.getForObject(uri, Graph.class);
     }
 
