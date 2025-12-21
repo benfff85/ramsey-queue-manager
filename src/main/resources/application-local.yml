@@ -24,6 +24,8 @@ ramsey:
     url: ${ramsey.mw.host}/api/ramsey/campaigns
   stage:
     url: ${ramsey.mw.host}/api/ramsey/stages
+  stage-progression:
+    frequency-in-millis: 30000
 
 spring:
   data:
