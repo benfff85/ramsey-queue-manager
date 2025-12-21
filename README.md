@@ -60,6 +60,23 @@ Monitors client health and marks inactive clients.
 {"baseGraphId": 6, "stageId": 6, "edgesToFlip": [...], "cliqueCount": 1051000}
 ```
 
+## Useful Redis CLI Commands
+
+Check queue depth for a stage:
+```bash
+docker exec -it ramsey-redis-1 redis-cli LLEN work_queue:7
+```
+
+List all best result keys:
+```bash
+docker exec -it ramsey-redis-1 redis-cli KEYS "best_result:*"
+```
+
+Get best result for a stage:
+```bash
+docker exec -it ramsey-redis-1 redis-cli GET best_result:7
+```
+
 ## Environment Variables
 
 | Variable | Description | Default |
