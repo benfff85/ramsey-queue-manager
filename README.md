@@ -60,6 +60,10 @@ Monitors client health and marks inactive clients.
 {"baseGraphId": 6, "stageId": 6, "edgesToFlip": [...], "cliqueCount": 1051000}
 ```
 
+**Processed Count:** `processed_count:{stageId}` (Integer - incremented by workers)
+- Tracks total work units processed for a stage
+- Useful for monitoring progress when `PUBLISH_RESULTS=false`
+
 ## Useful Redis CLI Commands
 
 Check queue depth for a stage:
@@ -74,7 +78,12 @@ docker exec -it ramsey-redis-1 redis-cli KEYS "best_result:*"
 
 Get best result for a stage:
 ```bash
-docker exec -it ramsey-redis-1 redis-cli GET best_result:7
+docker exec ramsey-redis-1 redis-cli GET best_result:7
+```
+
+Get processed count for a stage (with formatting):
+```bash
+docker exec ramsey-redis-1 redis-cli GET processed_count:7 | tr -d '"\r' | python3 -c "import sys; print(f'{int(sys.stdin.read()):,}')"
 ```
 
 ## Environment Variables
