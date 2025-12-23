@@ -13,13 +13,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Objects;
+import java.util.*;
 
 /**
  * Queue Feeder - pushes work items to Redis queue.
- * Replaces the old MySQL-based work unit creation.
+ * Uses cardinality-based ordering to prioritize high-cardinality edges.
  */
 @Slf4j
 @Component
@@ -31,9 +29,13 @@ public class QueueFeeder {
     private Integer graphId;
     private List<Edge> edges;
 
+    // Sorted edge lists by color (sorted by cardinality descending)
+    private List<Edge> redEdges;
+    private List<Edge> blueEdges;
+
     // Track position for resuming work generation
-    private int lastLeftEdgeIndex = 0;
-    private int lastRightEdgeIndex = 0;
+    private int lastRedIndex = 0;
+    private int lastBlueIndex = 0;
     private boolean allWorkCompleted = false;
 
     public QueueFeeder(MiddlewareClient middlewareClient, RedisQueueService redisQueueService,
@@ -61,10 +63,79 @@ public class QueueFeeder {
         for (int i = 0; i < graph.getEdgeData().length(); i++) {
             edges.get(i).setColoring(graph.getEdgeData().charAt(i));
         }
+
+        // Calculate cardinality and sort edges by color
+        calculateCardinalityAndSortEdges();
+
         // Reset position when graph changes
-        lastLeftEdgeIndex = 0;
-        lastRightEdgeIndex = 0;
+        lastRedIndex = 0;
+        lastBlueIndex = 0;
         allWorkCompleted = false;
+    }
+
+    /**
+     * Calculate cardinality for each edge and separate into sorted color lists.
+     * Cardinality = count of same-colored edges touching either vertex.
+     */
+    private void calculateCardinalityAndSortEdges() {
+        log.info("Calculating edge cardinalities");
+
+        // Build adjacency map: vertex -> list of edges touching that vertex
+        Map<Integer, List<Edge>> vertexToEdges = new HashMap<>();
+        for (Edge edge : edges) {
+            vertexToEdges.computeIfAbsent(edge.getVertexOne(), k -> new ArrayList<>()).add(edge);
+            vertexToEdges.computeIfAbsent(edge.getVertexTwo(), k -> new ArrayList<>()).add(edge);
+        }
+
+        // Calculate cardinality for each edge
+        for (Edge edge : edges) {
+            int cardinality = 0;
+            char color = edge.getColoring();
+
+            // Count same-colored edges touching vertexOne
+            for (Edge neighbor : vertexToEdges.get(edge.getVertexOne())) {
+                if (neighbor != edge && neighbor.getColoring() == color) {
+                    cardinality++;
+                }
+            }
+
+            // Count same-colored edges touching vertexTwo
+            for (Edge neighbor : vertexToEdges.get(edge.getVertexTwo())) {
+                if (neighbor != edge && neighbor.getColoring() == color) {
+                    cardinality++;
+                }
+            }
+
+            edge.setCardinality(cardinality);
+        }
+
+        // Separate and sort by cardinality (descending)
+        redEdges = new ArrayList<>();
+        blueEdges = new ArrayList<>();
+
+        for (Edge edge : edges) {
+            if (edge.getColoring() == '1') {
+                redEdges.add(edge);
+            } else {
+                blueEdges.add(edge);
+            }
+        }
+
+        // Sort by cardinality descending
+        redEdges.sort((a, b) -> b.getCardinality().compareTo(a.getCardinality()));
+        blueEdges.sort((a, b) -> b.getCardinality().compareTo(a.getCardinality()));
+
+        log.info("Red edges: {}, Blue edges: {}", redEdges.size(), blueEdges.size());
+        if (!redEdges.isEmpty()) {
+            log.info("Max red cardinality: {}, Min: {}",
+                    redEdges.get(0).getCardinality(),
+                    redEdges.get(redEdges.size() - 1).getCardinality());
+        }
+        if (!blueEdges.isEmpty()) {
+            log.info("Max blue cardinality: {}, Min: {}",
+                    blueEdges.get(0).getCardinality(),
+                    blueEdges.get(blueEdges.size() - 1).getCardinality());
+        }
     }
 
     @Scheduled(fixedRateString = "${ramsey.work-unit.queue.frequency-in-millis}")
@@ -106,51 +177,55 @@ public class QueueFeeder {
             applyGraphAndEdgeColoring(graph);
         }
 
-        // Generate new work items
-        int leftEdgeIndex = lastLeftEdgeIndex;
-        int rightEdgeIndex = lastRightEdgeIndex;
+        // Generate new work items - pairing red edges with blue edges by cardinality
+        int redIndex = lastRedIndex;
+        int blueIndex = lastBlueIndex;
 
-        log.info("Starting from left edge index: {}, right edge index: {}", leftEdgeIndex, rightEdgeIndex);
+        log.info("Starting from red index: {}, blue index: {}", redIndex, blueIndex);
 
         List<WorkQueueItem> newWorkItems = new ArrayList<>();
         List<WorkUnitAnalysisType> analysisTypes = ramseyConfig.getWorkUnit().getQueue().getAnalysisType();
         int batchSize = ramseyConfig.getWorkUnit().getQueue().getDepth().getPublishBatchSize();
 
-        for (int i = leftEdgeIndex; i < edges.size() - 1; i++) {
-            Edge leftEdge = edges.get(i);
-            int startJ = (i == leftEdgeIndex) ? rightEdgeIndex + 1 : i + 1;
+        // Iterate through all red/blue combinations, highest cardinality first
+        for (int r = redIndex; r < redEdges.size(); r++) {
+            Edge redEdge = redEdges.get(r);
+            int startB = (r == redIndex) ? blueIndex : 0;
 
-            for (int j = startJ; j < edges.size(); j++) {
-                Edge rightEdge = edges.get(j);
+            for (int b = startB; b < blueEdges.size(); b++) {
+                Edge blueEdge = blueEdges.get(b);
 
-                if (leftEdge.getColoring() != rightEdge.getColoring()) {
-                    for (WorkUnitAnalysisType analysisType : analysisTypes) {
-                        newWorkItems.add(WorkQueueItem.builder()
-                                .baseGraphId(graphId)
-                                .stageId(stage.getStageId())
-                                .edgesToFlip(List.of(leftEdge, rightEdge))
-                                .analysisType(analysisType)
-                                .build());
+                for (WorkUnitAnalysisType analysisType : analysisTypes) {
+                    newWorkItems.add(WorkQueueItem.builder()
+                            .baseGraphId(graphId)
+                            .edgesToFlip(List.of(redEdge, blueEdge))
+                            .analysisType(analysisType)
+                            .build());
+                }
+
+                // Publish batch if we've reached the batch size
+                if (newWorkItems.size() >= batchSize) {
+                    publishToRedis(newWorkItems, stage.getStageId());
+                    newWorkItems.clear();
+                }
+
+                workUnitCountToCreate--;
+                if (workUnitCountToCreate <= 0) {
+                    // Save position for next run
+                    lastRedIndex = r;
+                    lastBlueIndex = b + 1;
+
+                    // Handle wrap to next red edge
+                    if (lastBlueIndex >= blueEdges.size()) {
+                        lastRedIndex++;
+                        lastBlueIndex = 0;
                     }
 
-                    // Publish batch if we've reached the batch size
-                    if (newWorkItems.size() >= batchSize) {
+                    if (!newWorkItems.isEmpty()) {
                         publishToRedis(newWorkItems, stage.getStageId());
-                        newWorkItems.clear();
                     }
-
-                    workUnitCountToCreate--;
-                    if (workUnitCountToCreate <= 0) {
-                        // Save position for next run
-                        lastLeftEdgeIndex = i;
-                        lastRightEdgeIndex = j;
-
-                        if (!newWorkItems.isEmpty()) {
-                            publishToRedis(newWorkItems, stage.getStageId());
-                        }
-                        log.info("Completed feedQueue, saved position: left={}, right={}", i, j);
-                        return;
-                    }
+                    log.info("Completed feedQueue, saved position: red={}, blue={}", lastRedIndex, lastBlueIndex);
+                    return;
                 }
             }
         }
