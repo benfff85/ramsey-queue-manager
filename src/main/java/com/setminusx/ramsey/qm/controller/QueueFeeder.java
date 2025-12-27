@@ -6,7 +6,6 @@ import com.setminusx.ramsey.qm.model.Graph;
 import com.setminusx.ramsey.qm.model.Stage;
 import com.setminusx.ramsey.qm.model.WorkQueueItem;
 import com.setminusx.ramsey.qm.model.Edge;
-import com.setminusx.ramsey.qm.model.WorkUnitAnalysisType;
 import com.setminusx.ramsey.qm.service.RedisQueueService;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
@@ -184,7 +183,6 @@ public class QueueFeeder {
         log.info("Starting from red index: {}, blue index: {}", redIndex, blueIndex);
 
         List<WorkQueueItem> newWorkItems = new ArrayList<>();
-        List<WorkUnitAnalysisType> analysisTypes = ramseyConfig.getWorkUnit().getQueue().getAnalysisType();
         int batchSize = ramseyConfig.getWorkUnit().getQueue().getDepth().getPublishBatchSize();
 
         // Iterate through all red/blue combinations, highest cardinality first
@@ -195,13 +193,10 @@ public class QueueFeeder {
             for (int b = startB; b < blueEdges.size(); b++) {
                 Edge blueEdge = blueEdges.get(b);
 
-                for (WorkUnitAnalysisType analysisType : analysisTypes) {
-                    newWorkItems.add(WorkQueueItem.builder()
-                            .baseGraphId(graphId)
-                            .edgesToFlip(List.of(redEdge, blueEdge))
-                            .analysisType(analysisType)
-                            .build());
-                }
+                newWorkItems.add(WorkQueueItem.builder()
+                        .baseGraphId(graphId)
+                        .edgesToFlip(List.of(redEdge, blueEdge))
+                        .build());
 
                 // Publish batch if we've reached the batch size
                 if (newWorkItems.size() >= batchSize) {

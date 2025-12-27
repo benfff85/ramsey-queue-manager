@@ -9,7 +9,7 @@ import java.util.List;
 
 /**
  * Lightweight work queue item for Redis storage.
- * Note: stageId not included as worker gets it from MW API
+ * Note: stageId and analysisType not included - worker gets from MW API/config
  */
 @Data
 @Builder
@@ -19,6 +19,5 @@ public class WorkQueueItem {
 
     private Integer baseGraphId;
     private List<Edge> edgesToFlip;
-    private WorkUnitAnalysisType analysisType;
 
 }
