@@ -1,6 +1,7 @@
 package com.setminusx.ramsey.qm.service;
 
 import com.setminusx.ramsey.qm.model.BestResult;
+import com.setminusx.ramsey.qm.model.Edge;
 import com.setminusx.ramsey.qm.model.WorkQueueItem;
 import lombok.extern.slf4j.Slf4j;
 import tools.jackson.databind.ObjectMapper;
@@ -31,22 +32,25 @@ public class RedisQueueService {
 
     /**
      * Push multiple work items to the queue using batch operation.
+     * Uses compact format: baseGraphId|v1,v2|v1,v2
      */
     public void pushWorkItems(Integer stageId, List<WorkQueueItem> items) {
         String queueKey = getQueueKey(stageId);
 
-        // Serialize all items first
-        String[] jsonItems = new String[items.size()];
+        // Serialize to compact format: baseGraphId|v1,v2|v1,v2
+        String[] compactItems = new String[items.size()];
         for (int i = 0; i < items.size(); i++) {
-            try {
-                jsonItems[i] = objectMapper.writeValueAsString(items.get(i));
-            } catch (Exception e) {
-                throw new RuntimeException("Failed to serialize work queue item", e);
+            WorkQueueItem item = items.get(i);
+            StringBuilder sb = new StringBuilder();
+            sb.append(item.getBaseGraphId());
+            for (Edge edge : item.getEdgesToFlip()) {
+                sb.append('|').append(edge.getVertexOne()).append(',').append(edge.getVertexTwo());
             }
+            compactItems[i] = sb.toString();
         }
 
         // Push all at once (much faster than individual pushes)
-        redisTemplate.opsForList().leftPushAll(queueKey, jsonItems);
+        redisTemplate.opsForList().leftPushAll(queueKey, compactItems);
         log.debug("Pushed {} items to queue {}", items.size(), queueKey);
     }
 
