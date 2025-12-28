@@ -71,6 +71,16 @@ Check queue depth for a stage:
 docker exec -it ramsey-redis-1 redis-cli LLEN work_queue:7
 ```
 
+Peek at first item in queue (without removing):
+```bash
+docker exec ramsey-redis-1 redis-cli LINDEX work_queue:406 0
+```
+
+Peek at first 5 items in queue:
+```bash
+docker exec ramsey-redis-1 redis-cli LRANGE work_queue:406 0 4
+```
+
 List all best result keys:
 ```bash
 docker exec -it ramsey-redis-1 redis-cli KEYS "best_result:*"
@@ -83,7 +93,7 @@ docker exec ramsey-redis-1 redis-cli GET best_result:7
 
 Get processed count for a stage (with formatting):
 ```bash
-docker exec ramsey-redis-1 redis-cli GET processed_count:7 | tr -d '"\r' | python3 -c "import sys; print(f'{int(sys.stdin.read()):,}')"
+docker exec ramsey-redis-1 redis-cli GET processed_count:7 | tr -d '"\r' | python3 -c "import sys; val=sys.stdin.read().strip(); print(f'{int(val):,}' if val else 'Key not found')"
 ```
 
 ## Environment Variables
