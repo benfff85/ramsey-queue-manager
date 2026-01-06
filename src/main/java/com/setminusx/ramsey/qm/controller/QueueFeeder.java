@@ -6,6 +6,7 @@ import com.setminusx.ramsey.qm.model.Graph;
 import com.setminusx.ramsey.qm.model.Stage;
 import com.setminusx.ramsey.qm.model.WorkQueueItem;
 import com.setminusx.ramsey.qm.model.Edge;
+import com.setminusx.ramsey.qm.model.EdgePair;
 import com.setminusx.ramsey.qm.service.RedisQueueService;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
@@ -16,7 +17,8 @@ import java.util.*;
 
 /**
  * Queue Feeder - pushes work items to Redis queue.
- * Uses cardinality-based ordering to prioritize high-cardinality edges.
+ * Uses combined cardinality scoring to prioritize pairs where both edges have
+ * high cardinality.
  */
 @Slf4j
 @Component
@@ -28,13 +30,11 @@ public class QueueFeeder {
     private Integer graphId;
     private List<Edge> edges;
 
-    // Sorted edge lists by color (sorted by cardinality descending)
-    private List<Edge> redEdges;
-    private List<Edge> blueEdges;
+    // Sorted edge pairs by combined cardinality (red + blue) descending
+    private List<EdgePair> sortedPairs;
 
     // Track position for resuming work generation
-    private int lastRedIndex = 0;
-    private int lastBlueIndex = 0;
+    private int lastPairIndex = 0;
     private boolean allWorkCompleted = false;
 
     public QueueFeeder(MiddlewareClient middlewareClient, RedisQueueService redisQueueService,
@@ -63,21 +63,22 @@ public class QueueFeeder {
             edges.get(i).setColoring(graph.getEdgeData().charAt(i));
         }
 
-        // Calculate cardinality and sort edges by color
-        calculateCardinalityAndSortEdges();
+        // Calculate cardinality and generate sorted pairs
+        calculateCardinalityAndGenerateSortedPairs();
 
         // Reset position when graph changes
-        lastRedIndex = 0;
-        lastBlueIndex = 0;
+        lastPairIndex = 0;
         allWorkCompleted = false;
     }
 
     /**
-     * Calculate cardinality for each edge and separate into sorted color lists.
-     * Cardinality = count of same-colored edges touching either vertex.
+     * Calculate cardinality for each edge and generate sorted pairs by combined
+     * score.
+     * Combined score = red cardinality + blue cardinality.
+     * This prioritizes pairs where BOTH edges have high impact potential.
      */
-    private void calculateCardinalityAndSortEdges() {
-        log.info("Calculating edge cardinalities");
+    private void calculateCardinalityAndGenerateSortedPairs() {
+        log.info("Calculating edge cardinalities and generating sorted pairs");
 
         // Build adjacency map: vertex -> list of edges touching that vertex
         Map<Integer, List<Edge>> vertexToEdges = new HashMap<>();
@@ -108,9 +109,9 @@ public class QueueFeeder {
             edge.setCardinality(cardinality);
         }
 
-        // Separate and sort by cardinality (descending)
-        redEdges = new ArrayList<>();
-        blueEdges = new ArrayList<>();
+        // Separate edges by color
+        List<Edge> redEdges = new ArrayList<>();
+        List<Edge> blueEdges = new ArrayList<>();
 
         for (Edge edge : edges) {
             if (edge.getColoring() == '1') {
@@ -120,20 +121,30 @@ public class QueueFeeder {
             }
         }
 
-        // Sort by cardinality descending
-        redEdges.sort((a, b) -> b.getCardinality().compareTo(a.getCardinality()));
-        blueEdges.sort((a, b) -> b.getCardinality().compareTo(a.getCardinality()));
-
         log.info("Red edges: {}, Blue edges: {}", redEdges.size(), blueEdges.size());
-        if (!redEdges.isEmpty()) {
-            log.info("Max red cardinality: {}, Min: {}",
-                    redEdges.get(0).getCardinality(),
-                    redEdges.get(redEdges.size() - 1).getCardinality());
+        log.info("Generating {} total pairs...", (long) redEdges.size() * blueEdges.size());
+
+        // Generate all pairs with combined cardinality score
+        sortedPairs = new ArrayList<>(redEdges.size() * blueEdges.size());
+        for (Edge red : redEdges) {
+            for (Edge blue : blueEdges) {
+                int combinedScore = red.getCardinality() + blue.getCardinality();
+                sortedPairs.add(EdgePair.builder()
+                        .redEdge(red)
+                        .blueEdge(blue)
+                        .combinedScore(combinedScore)
+                        .build());
+            }
         }
-        if (!blueEdges.isEmpty()) {
-            log.info("Max blue cardinality: {}, Min: {}",
-                    blueEdges.get(0).getCardinality(),
-                    blueEdges.get(blueEdges.size() - 1).getCardinality());
+
+        // Sort by combined score descending (highest impact potential first)
+        sortedPairs.sort((a, b) -> b.getCombinedScore().compareTo(a.getCombinedScore()));
+
+        if (!sortedPairs.isEmpty()) {
+            log.info("Generated {} pairs. Max combined score: {}, Min: {}",
+                    sortedPairs.size(),
+                    sortedPairs.get(0).getCombinedScore(),
+                    sortedPairs.get(sortedPairs.size() - 1).getCombinedScore());
         }
     }
 
@@ -176,56 +187,42 @@ public class QueueFeeder {
             applyGraphAndEdgeColoring(graph);
         }
 
-        // Generate new work items - pairing red edges with blue edges by cardinality
-        int redIndex = lastRedIndex;
-        int blueIndex = lastBlueIndex;
-
-        log.info("Starting from red index: {}, blue index: {}", redIndex, blueIndex);
+        // Generate work items from pre-sorted pairs (highest combined cardinality
+        // first)
+        log.info("Starting from pair index: {}", lastPairIndex);
 
         List<WorkQueueItem> newWorkItems = new ArrayList<>();
         int batchSize = ramseyConfig.getWorkUnit().getQueue().getDepth().getPublishBatchSize();
 
-        // Iterate through all red/blue combinations, highest cardinality first
-        for (int r = redIndex; r < redEdges.size(); r++) {
-            Edge redEdge = redEdges.get(r);
-            int startB = (r == redIndex) ? blueIndex : 0;
+        // Iterate through sorted pairs
+        for (int i = lastPairIndex; i < sortedPairs.size(); i++) {
+            EdgePair pair = sortedPairs.get(i);
 
-            for (int b = startB; b < blueEdges.size(); b++) {
-                Edge blueEdge = blueEdges.get(b);
+            newWorkItems.add(WorkQueueItem.builder()
+                    .baseGraphId(graphId)
+                    .edgesToFlip(List.of(pair.getRedEdge(), pair.getBlueEdge()))
+                    .build());
 
-                newWorkItems.add(WorkQueueItem.builder()
-                        .baseGraphId(graphId)
-                        .edgesToFlip(List.of(redEdge, blueEdge))
-                        .build());
+            // Publish batch if we've reached the batch size
+            if (newWorkItems.size() >= batchSize) {
+                publishToRedis(newWorkItems, stage.getStageId());
+                newWorkItems.clear();
+            }
 
-                // Publish batch if we've reached the batch size
-                if (newWorkItems.size() >= batchSize) {
+            workUnitCountToCreate--;
+            if (workUnitCountToCreate <= 0) {
+                // Save position for next run
+                lastPairIndex = i + 1;
+
+                if (!newWorkItems.isEmpty()) {
                     publishToRedis(newWorkItems, stage.getStageId());
-                    newWorkItems.clear();
                 }
-
-                workUnitCountToCreate--;
-                if (workUnitCountToCreate <= 0) {
-                    // Save position for next run
-                    lastRedIndex = r;
-                    lastBlueIndex = b + 1;
-
-                    // Handle wrap to next red edge
-                    if (lastBlueIndex >= blueEdges.size()) {
-                        lastRedIndex++;
-                        lastBlueIndex = 0;
-                    }
-
-                    if (!newWorkItems.isEmpty()) {
-                        publishToRedis(newWorkItems, stage.getStageId());
-                    }
-                    log.info("Completed feedQueue, saved position: red={}, blue={}", lastRedIndex, lastBlueIndex);
-                    return;
-                }
+                log.info("Completed feedQueue, saved position: pairIndex={}", lastPairIndex);
+                return;
             }
         }
 
-        // Reached the end of all edge combinations
+        // Reached the end of all pairs
         if (!newWorkItems.isEmpty()) {
             log.info("Publishing final batch of new work items for this graph");
             publishToRedis(newWorkItems, stage.getStageId());
@@ -233,7 +230,7 @@ public class QueueFeeder {
 
         // Mark all work as completed to prevent regeneration
         allWorkCompleted = true;
-        log.info("All edge combinations generated for graph id {}. Total work complete.", graphId);
+        log.info("All {} pairs generated for graph id {}. Total work complete.", sortedPairs.size(), graphId);
     }
 
     private void publishToRedis(List<WorkQueueItem> items, Integer stageId) {
