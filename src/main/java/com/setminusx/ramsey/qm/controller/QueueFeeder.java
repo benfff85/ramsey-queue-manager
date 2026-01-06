@@ -31,7 +31,7 @@ public class QueueFeeder {
     private List<Edge> edges;
 
     // Sorted edge pairs by combined cardinality (red + blue) descending
-    private List<EdgePair> sortedPairs;
+    private List<EdgePair> sortedPairs = new ArrayList<>();
 
     // Track position for resuming work generation
     private int lastPairIndex = 0;
