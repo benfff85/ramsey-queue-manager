@@ -25,3 +25,6 @@ hs_err_pid*
 /.idea/
 /ramsey-mw.iml
 /target/
+
+# Mac
+.DS_Store
