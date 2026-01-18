@@ -148,7 +148,6 @@ public class QueueFeeder {
 
         int[] current = pairHeap.poll();
         int ri = current[0];
-        int bi = current[1];
 
         // Push the next blue for this red row if available
         int nextBi = nextBlueForRed[ri];
@@ -164,6 +163,7 @@ public class QueueFeeder {
 
     @Scheduled(fixedRateString = "${ramsey.work-unit.queue.frequency-in-millis}")
     public void feedQueue() {
+        long feedQueueStart = System.currentTimeMillis();
         log.info("Processing feedQueue");
 
         List<Stage> stages = middlewareClient.getStagesByCampaignIdAndStatus(ramseyConfig.getCampaignId(),
@@ -197,8 +197,12 @@ public class QueueFeeder {
 
         log.info("Pairs generated so far: {}/{}", pairsGenerated, totalPairs);
 
-        List<WorkQueueItem> newWorkItems = new ArrayList<>();
         int batchSize = ramseyConfig.getWorkUnit().getQueue().getDepth().getPublishBatchSize();
+        List<WorkQueueItem> newWorkItems = new ArrayList<>(batchSize);
+        long totalGenerationTimeMs = 0;
+        long totalPushTimeMs = 0;
+        int batchesPushed = 0;
+        long batchGenStart = System.currentTimeMillis();
 
         while (workUnitCountToCreate > 0) {
             int[] pair = getNextPair();
@@ -217,15 +221,24 @@ public class QueueFeeder {
             pairsGenerated++;
 
             if (newWorkItems.size() >= batchSize) {
+                totalGenerationTimeMs += System.currentTimeMillis() - batchGenStart;
+                long pushStart = System.currentTimeMillis();
                 publishToRedis(newWorkItems, stage.getStageId());
+                totalPushTimeMs += System.currentTimeMillis() - pushStart;
+                batchesPushed++;
                 newWorkItems.clear();
+                batchGenStart = System.currentTimeMillis();
             }
 
             workUnitCountToCreate--;
         }
 
         if (!newWorkItems.isEmpty()) {
+            totalGenerationTimeMs += System.currentTimeMillis() - batchGenStart;
+            long pushStart = System.currentTimeMillis();
             publishToRedis(newWorkItems, stage.getStageId());
+            totalPushTimeMs += System.currentTimeMillis() - pushStart;
+            batchesPushed++;
         }
 
         if (pairHeap.isEmpty()) {
@@ -234,6 +247,10 @@ public class QueueFeeder {
         } else {
             log.info("Completed feedQueue, pairs generated: {}/{}", pairsGenerated, totalPairs);
         }
+
+        long totalFeedQueueMs = System.currentTimeMillis() - feedQueueStart;
+        log.info("feedQueue timing: total={}ms, generation={}ms, redisPush={}ms, batches={}",
+                totalFeedQueueMs, totalGenerationTimeMs, totalPushTimeMs, batchesPushed);
     }
 
     private void publishToRedis(List<WorkQueueItem> items, Integer stageId) {

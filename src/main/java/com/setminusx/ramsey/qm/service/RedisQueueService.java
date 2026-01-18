@@ -41,7 +41,7 @@ public class RedisQueueService {
         String[] compactItems = new String[items.size()];
         for (int i = 0; i < items.size(); i++) {
             WorkQueueItem item = items.get(i);
-            StringBuilder sb = new StringBuilder();
+            StringBuilder sb = new StringBuilder(30);
             sb.append(item.getBaseGraphId());
             for (Edge edge : item.getEdgesToFlip()) {
                 sb.append('|').append(edge.getVertexOne()).append(',').append(edge.getVertexTwo());
