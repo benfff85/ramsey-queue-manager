@@ -113,19 +113,27 @@ public class StageProgressionMonitor {
         currentStage.setStatus(Stage.Status.INACTIVE);
         middlewareClient.updateStage(currentStage);
 
-        // 5. Create new active stage
+        // 5. Create new active stage with default enumeration strategy
         Stage newStage = new Stage();
         newStage.setStatus(Stage.Status.ACTIVE);
         newStage.setBaseGraphId(savedGraph.getGraphId());
         newStage.setCampaignId(currentStage.getCampaignId());
 
+        // Apply default work enumeration strategy if configured
+        String defaultStrategy = ramseyConfig.getStage().getDefaultWorkEnumerationStrategy();
+        if (defaultStrategy != null && !defaultStrategy.isBlank()) {
+            newStage.setWorkEnumerationStrategy(defaultStrategy);
+            log.info("Setting work enumeration strategy to: {}", defaultStrategy);
+        }
+
         Stage createdStage = middlewareClient.createStage(newStage);
         log.info("Created new stage {} with base graph {}",
                 createdStage.getStageId(), savedGraph.getGraphId());
 
-        // 6. Clear Redis queue for old stage and delete best result
-        log.info("Clearing Redis queue and best result for old stage {}", currentStage.getStageId());
+        // 6. Clear Redis queue and counter keys for old stage
+        log.info("Clearing Redis queue, counter keys, and best result for old stage {}", currentStage.getStageId());
         redisQueueService.clearQueue(currentStage.getStageId());
+        redisQueueService.clearStageCounter(currentStage.getStageId());
         redisQueueService.deleteBestResult(currentStage.getStageId());
 
         log.info("Stage progression complete! New stage {} is now active", createdStage.getStageId());

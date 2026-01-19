@@ -85,6 +85,12 @@ public class RamseyConfig {
     @Data
     public static class Stage {
         private String url;
+        /**
+         * Default work enumeration strategy for new stages.
+         * If null, queue-based mode is used. Valid values:
+         * BASIC, SINGLE_EDGE_CARDINALITY, DUAL_EDGE_CARDINALITY
+         */
+        private String defaultWorkEnumerationStrategy;
     }
 
 }
