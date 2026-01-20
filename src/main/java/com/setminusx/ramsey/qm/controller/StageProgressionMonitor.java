@@ -130,7 +130,28 @@ public class StageProgressionMonitor {
         log.info("Created new stage {} with base graph {}",
                 createdStage.getStageId(), savedGraph.getGraphId());
 
-        // 6. Clear Redis queue and counter keys for old stage
+        // 6. Initialize counter-based mode for new stage (before clearing old stage)
+        if (createdStage.getWorkEnumerationStrategy() != null) {
+            long redCount = 0, blueCount = 0;
+            for (int i = 0; i < savedGraph.getEdgeData().length(); i++) {
+                if (savedGraph.getEdgeData().charAt(i) == '1') {
+                    redCount++;
+                } else {
+                    blueCount++;
+                }
+            }
+            long totalPairs = redCount * blueCount;
+            log.info("Initializing counter for stage {}: redEdges={}, blueEdges={}, totalPairs={}",
+                    createdStage.getStageId(), redCount, blueCount, totalPairs);
+            redisQueueService.initializeStageCounter(
+                    createdStage.getStageId(),
+                    savedGraph.getGraphId(),
+                    savedGraph,
+                    totalPairs,
+                    createdStage.getWorkEnumerationStrategy());
+        }
+
+        // 7. Clear Redis queue and counter keys for old stage
         log.info("Clearing Redis queue, counter keys, and best result for old stage {}", currentStage.getStageId());
         redisQueueService.clearQueue(currentStage.getStageId());
         redisQueueService.clearStageCounter(currentStage.getStageId());
