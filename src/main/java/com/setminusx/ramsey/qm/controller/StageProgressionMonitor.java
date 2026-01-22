@@ -132,23 +132,7 @@ public class StageProgressionMonitor {
 
         // 6. Initialize counter-based mode for new stage (before clearing old stage)
         if (createdStage.getWorkEnumerationStrategy() != null) {
-            long redCount = 0, blueCount = 0;
-            for (int i = 0; i < savedGraph.getEdgeData().length(); i++) {
-                if (savedGraph.getEdgeData().charAt(i) == '1') {
-                    redCount++;
-                } else {
-                    blueCount++;
-                }
-            }
-            long totalPairs = redCount * blueCount;
-            log.info("Initializing counter for stage {}: redEdges={}, blueEdges={}, totalPairs={}",
-                    createdStage.getStageId(), redCount, blueCount, totalPairs);
-            redisQueueService.initializeStageCounter(
-                    createdStage.getStageId(),
-                    savedGraph.getGraphId(),
-                    savedGraph,
-                    totalPairs,
-                    createdStage.getWorkEnumerationStrategy());
+            initializeRedisForStage(createdStage, savedGraph);
         }
 
         // 7. Clear Redis queue and counter keys for old stage
@@ -167,5 +151,73 @@ public class StageProgressionMonitor {
         return "{" + edges.stream()
                 .map(e -> "{" + e.getVertexOne() + ":" + e.getVertexTwo() + "}")
                 .collect(Collectors.joining(",")) + "}";
+    }
+
+    /**
+     * Periodically check that the active stage is properly initialized in Redis.
+     * This safeguards against Redis data loss (restarts/flushes).
+     */
+    @Scheduled(fixedRateString = "${ramsey.work-unit.queue.frequency-in-millis:5000}")
+    public void ensureActiveStageInitialized() {
+        List<Stage> stages = middlewareClient.getStagesByCampaignIdAndStatus(ramseyConfig.getCampaignId(),
+                Stage.Status.ACTIVE);
+
+        if (stages.isEmpty()) {
+            return;
+        }
+
+        if (stages.size() > 1) {
+            log.warn("Expected 1 active stage, found {}. Using the first one.", stages.size());
+        }
+
+        Stage stage = stages.getFirst();
+
+        if (stage.getWorkEnumerationStrategy() != null) {
+            checkAndInitializeStage(stage);
+        }
+    }
+
+    private void checkAndInitializeStage(Stage stage) {
+        // Check if already initialized
+        if (redisQueueService.hasStageConfig(stage.getStageId())) {
+            // Already initialized, do nothing
+            return;
+        }
+
+        // Need to initialize - fetch graph and compute total pairs
+        log.info("Active stage {} config missing in Redis. Re-initializing...", stage.getStageId());
+
+        Graph graph = middlewareClient.getGraphById(stage.getBaseGraphId());
+        if (graph == null) {
+            log.error("Could not fetch base graph {} for stage {}", stage.getBaseGraphId(), stage.getStageId());
+            return;
+        }
+
+        initializeRedisForStage(stage, graph);
+    }
+
+    private void initializeRedisForStage(Stage stage, Graph graph) {
+        // Calculate total pairs (red edges * blue edges)
+        long redCount = 0;
+        long blueCount = 0;
+        for (int i = 0; i < graph.getEdgeData().length(); i++) {
+            if (graph.getEdgeData().charAt(i) == '1') {
+                redCount++;
+            } else {
+                blueCount++;
+            }
+        }
+        long calculatedTotalPairs = redCount * blueCount;
+
+        log.info("Initializing counter-based mode for stage {}: redEdges={}, blueEdges={}, totalPairs={}, strategy={}",
+                stage.getStageId(), redCount, blueCount, calculatedTotalPairs, stage.getWorkEnumerationStrategy());
+
+        // Initialize Redis with counter and stage config
+        redisQueueService.initializeStageCounter(
+                stage.getStageId(),
+                stage.getBaseGraphId(),
+                graph,
+                calculatedTotalPairs,
+                stage.getWorkEnumerationStrategy());
     }
 }
