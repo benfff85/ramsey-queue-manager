@@ -12,6 +12,8 @@ public class Stage {
     private Integer baseGraphId;
     private Integer campaignId;
     private Integer latestWorkUnitId;
+    private String workEnumerationStrategy;
+    private String details;
     private LocalDateTime createdDate;
     private LocalDateTime updatedDate;
 

@@ -5,28 +5,35 @@ This service manages the work queue for the Ramsey distributed computing system.
 ## Architecture
 
 ```
-┌─────────────────┐     ┌───────────────┐     ┌─────────────┐
-│  Queue Manager  │────▶│     Redis     │◀────│   Workers   │
-│  (QueueFeeder)  │     │  work_queue:X │     │ (pop work)  │
-│                 │     │  best_result:X│     │ (set best)  │
-│  (Progression)  │◀────│               │     │             │
-└─────────────────┘     └───────────────┘     └─────────────┘
+┌─────────────────┐     ┌─────────────────────┐     ┌─────────────┐
+│  Queue Manager  │────▶│       Redis         │◀────│   Workers   │
+│  (QueueFeeder)  │     │ work_queue:{id} (L) │     │ (pop/claim) │
+│                 │     │ work_index:{id} (C) │     │             │
+│  (Progression)  │◀────│ best_result:{id}    │     │             │
+└─────────────────┘     └─────────────────────┘     └─────────────┘
         │
         ▼
   Creates new stage
 ```
+*(L) = Legacy Queue Mode, (C) = Counter Mode*
 
 ## Components
 
 ### Queue Feeder
 
-Runs at an interval defined by `ramsey.work-unit.queue.frequency-in-millis` (default: 30 seconds).
+Handles initialization and monitoring of work for the active stage. Supports two modes:
 
-- Checks Redis queue depth using O(1) `LLEN` operation
-- If depth < `ramsey.work-unit.queue.depth.min`, generates new work items
-- Pushes work items to Redis in batches using `LPUSH`
-- Workers consume from the other end using `RPOP` (FIFO ordering)
-- Tracks position in-memory; marks `allWorkCompleted` when all edge combinations generated
+**1. Counter-Based Mode (Default/New)**
+- Driven by `workEnumerationStrategy` on the Stage.
+- Initializes atomic counter `stage_work_index:{id}` at 0.
+- Sets `stage_config:{id}` containing graph data and strategy parameters.
+- Monitors progress by checking if counter >= `totalPairs`.
+
+**2. Queue-Based Mode (Legacy)**
+- Used if no strategy is defined.
+- Checks Redis queue depth using `LLEN`.
+- If depth < min threshold, generates exact work items and pushes to `work_queue:{id}`.
+- Workers consume using `RPOP`.
 
 ### Stage Progression Monitor
 
@@ -102,8 +109,9 @@ docker exec ramsey-redis-1 redis-cli GET processed_count:7 | tr -d '"\r' | pytho
 |----------|-------------|---------|
 | `REDIS_HOST` | Redis server hostname | `localhost` |
 | `REDIS_PORT` | Redis server port | `6379` |
-| `WORK_UNIT_QUEUE_DEPTH_MIN` | Min queue depth | `4000000` |
-| `WORK_UNIT_QUEUE_DEPTH_MAX` | Max queue depth | `8000000` |
+| `WORK_ENUMERATION_STRATEGY` | Strategy for work distribution (e.g. `DUAL_EDGE_CARDINALITY`). If empty, uses legacy queue-based mode. | `` |
+| `WORK_UNIT_QUEUE_DEPTH_MIN` | Min queue depth (Legacy mode only) | `4000000` |
+| `WORK_UNIT_QUEUE_DEPTH_MAX` | Max queue depth (Legacy mode only) | `8000000` |
 | `WORK_UNIT_ANALYSIS_TYPE` | Analysis type | `TARGETED` |
 | `STAGE_PROGRESSION_FREQ` | How often to check for improvements (ms) | `30000` |
 

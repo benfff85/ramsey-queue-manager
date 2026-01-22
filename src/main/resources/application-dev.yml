@@ -25,6 +25,7 @@ ramsey:
     url: ${ramsey.mw.host}/api/ramsey/campaigns
   stage:
     url: ${ramsey.mw.host}/api/ramsey/stages
+    default-work-enumeration-strategy: ${WORK_ENUMERATION_STRATEGY:}
   stage-progression:
     frequency-in-millis: ${STAGE_PROGRESSION_FREQ:30000}
 

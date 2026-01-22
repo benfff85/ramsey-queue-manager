@@ -113,19 +113,48 @@ public class StageProgressionMonitor {
         currentStage.setStatus(Stage.Status.INACTIVE);
         middlewareClient.updateStage(currentStage);
 
-        // 5. Create new active stage
+        // 5. Create new active stage with default enumeration strategy
         Stage newStage = new Stage();
         newStage.setStatus(Stage.Status.ACTIVE);
         newStage.setBaseGraphId(savedGraph.getGraphId());
         newStage.setCampaignId(currentStage.getCampaignId());
 
+        // Apply default work enumeration strategy if configured
+        String defaultStrategy = ramseyConfig.getStage().getDefaultWorkEnumerationStrategy();
+        if (defaultStrategy != null && !defaultStrategy.isBlank()) {
+            newStage.setWorkEnumerationStrategy(defaultStrategy);
+            log.info("Setting work enumeration strategy to: {}", defaultStrategy);
+        }
+
         Stage createdStage = middlewareClient.createStage(newStage);
         log.info("Created new stage {} with base graph {}",
                 createdStage.getStageId(), savedGraph.getGraphId());
 
-        // 6. Clear Redis queue for old stage and delete best result
-        log.info("Clearing Redis queue and best result for old stage {}", currentStage.getStageId());
+        // 6. Initialize counter-based mode for new stage (before clearing old stage)
+        if (createdStage.getWorkEnumerationStrategy() != null) {
+            long redCount = 0, blueCount = 0;
+            for (int i = 0; i < savedGraph.getEdgeData().length(); i++) {
+                if (savedGraph.getEdgeData().charAt(i) == '1') {
+                    redCount++;
+                } else {
+                    blueCount++;
+                }
+            }
+            long totalPairs = redCount * blueCount;
+            log.info("Initializing counter for stage {}: redEdges={}, blueEdges={}, totalPairs={}",
+                    createdStage.getStageId(), redCount, blueCount, totalPairs);
+            redisQueueService.initializeStageCounter(
+                    createdStage.getStageId(),
+                    savedGraph.getGraphId(),
+                    savedGraph,
+                    totalPairs,
+                    createdStage.getWorkEnumerationStrategy());
+        }
+
+        // 7. Clear Redis queue and counter keys for old stage
+        log.info("Clearing Redis queue, counter keys, and best result for old stage {}", currentStage.getStageId());
         redisQueueService.clearQueue(currentStage.getStageId());
+        redisQueueService.clearStageCounter(currentStage.getStageId());
         redisQueueService.deleteBestResult(currentStage.getStageId());
 
         log.info("Stage progression complete! New stage {} is now active", createdStage.getStageId());

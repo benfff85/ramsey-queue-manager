@@ -173,6 +173,14 @@ public class QueueFeeder {
         }
         Stage stage = stages.getFirst();
 
+        // Counter-based mode: if stage has enumeration strategy, use counter instead of
+        // queue
+        if (stage.getWorkEnumerationStrategy() != null) {
+            handleCounterBasedMode(stage);
+            return;
+        }
+
+        // Queue-based mode (legacy)
         long queueDepth = redisQueueService.getQueueDepth(stage.getStageId());
         log.info("Current Redis queue depth: {}", queueDepth);
 
@@ -256,6 +264,48 @@ public class QueueFeeder {
     private void publishToRedis(List<WorkQueueItem> items, Integer stageId) {
         log.info("Pushing {} work items to Redis queue", items.size());
         redisQueueService.pushWorkItems(stageId, items);
+    }
+
+    /**
+     * Handle counter-based mode: initialize once, then just monitor.
+     * Workers claim work ranges via INCRBY instead of popping from queue.
+     */
+    private void handleCounterBasedMode(Stage stage) {
+        // Check if already initialized
+        if (redisQueueService.hasStageConfig(stage.getStageId())) {
+            // Already initialized, just log status
+            long currentIndex = redisQueueService.getStageWorkIndex(stage.getStageId());
+            log.info("Counter-based mode active for stage {}: index={}/{}, strategy={}",
+                    stage.getStageId(), currentIndex, totalPairs, stage.getWorkEnumerationStrategy());
+            return;
+        }
+
+        // Need to initialize - fetch graph and compute total pairs
+        Graph graph = middlewareClient.getGraphById(stage.getBaseGraphId());
+
+        // Calculate total pairs (red edges * blue edges)
+        long redCount = 0;
+        long blueCount = 0;
+        for (int i = 0; i < graph.getEdgeData().length(); i++) {
+            if (graph.getEdgeData().charAt(i) == '1') {
+                redCount++;
+            } else {
+                blueCount++;
+            }
+        }
+        long calculatedTotalPairs = redCount * blueCount;
+        this.totalPairs = calculatedTotalPairs;
+
+        log.info("Initializing counter-based mode for stage {}: redEdges={}, blueEdges={}, totalPairs={}, strategy={}",
+                stage.getStageId(), redCount, blueCount, calculatedTotalPairs, stage.getWorkEnumerationStrategy());
+
+        // Initialize Redis with counter and stage config
+        redisQueueService.initializeStageCounter(
+                stage.getStageId(),
+                stage.getBaseGraphId(),
+                graph,
+                calculatedTotalPairs,
+                stage.getWorkEnumerationStrategy());
     }
 
 }
