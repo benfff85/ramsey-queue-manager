@@ -63,17 +63,9 @@ public class RamseyConfig {
 
         @Data
         public static class Queue {
-            private Depth depth;
             private String url;
             private List<WorkUnitAnalysisType> analysisType;
             private Long frequencyInMillis;
-
-            @Data
-            public static class Depth {
-                private Integer min;
-                private Integer max;
-                private Integer publishBatchSize;
-            }
         }
     }
 

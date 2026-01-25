@@ -5,37 +5,33 @@ This service manages the work queue for the Ramsey distributed computing system.
 ## Architecture
 
 ```
-┌─────────────────┐     ┌─────────────────────┐     ┌─────────────┐
-│  Queue Manager  │────▶│       Redis         │◀────│   Workers   │
-│  (QueueFeeder)  │     │ work_queue:{id} (L) │     │ (pop/claim) │
-│                 │     │ work_index:{id} (C) │     │             │
-│  (Progression)  │◀────│ best_result:{id}    │     │             │
-└─────────────────┘     └─────────────────────┘     └─────────────┘
+┌─────────────────────┐     ┌─────────────────────┐     ┌─────────────┐
+│    Queue Manager    │────▶│       Redis         │◀────│   Workers   │
+│  (Stage Monitor)    │     │ work_index:{id} (C) │     │   (claim)   │
+│   (Progression)     │◀────│ best_result:{id}    │     │             │
+└─────────────────────┘     └─────────────────────┘     └─────────────┘
         │
         ▼
   Creates new stage
 ```
-*(L) = Legacy Queue Mode, (C) = Counter Mode*
 
 ## Components
 
-### Queue Feeder
+### Stage Monitor & Initializer
 
-Handles initialization and monitoring of work for the active stage. Supports two modes:
+Responsible for the lifecycle of stages in Redis.
 
-**1. Counter-Based Mode (Default/New)**
-- Driven by `workEnumerationStrategy` on the Stage.
+**1. Stage Initialization**
+- Checks periodically (default: 5s) if the active stage is missing from Redis (e.g. after restart).
 - Initializes atomic counter `stage_work_index:{id}` at 0.
 - Sets `stage_config:{id}` containing graph data and strategy parameters.
-- Monitors progress by checking if counter >= `totalPairs`.
+- This ensures workers can always fetch configuration even if the Queue Manager restarts.
 
-**2. Queue-Based Mode (Legacy)**
-- Used if no strategy is defined.
-- Checks Redis queue depth using `LLEN`.
-- If depth < min threshold, generates exact work items and pushes to `work_queue:{id}`.
-- Workers consume using `RPOP`.
-
-### Stage Progression Monitor
+**2. Work Enumeration (Counter-Based)**
+- Driven by `workEnumerationStrategy` on the Stage.
+- Workers atomically claim ranges of work (e.g. 0-1000) using `INCRBY` on `stage_work_index`.
+- Workers compute the specific edges to flip based on the range index.
+- This effectively replaces the legacy "Queue Feeder" approach, eliminating memory bottlenecks.
 
 Runs at an interval defined by `ramsey.stage-progression.frequency-in-millis` (default: 30 seconds).
 
@@ -110,8 +106,6 @@ docker exec ramsey-redis-1 redis-cli GET processed_count:7 | tr -d '"\r' | pytho
 | `REDIS_HOST` | Redis server hostname | `localhost` |
 | `REDIS_PORT` | Redis server port | `6379` |
 | `WORK_ENUMERATION_STRATEGY` | Strategy for work distribution (e.g. `DUAL_EDGE_CARDINALITY`). If empty, uses legacy queue-based mode. | `` |
-| `WORK_UNIT_QUEUE_DEPTH_MIN` | Min queue depth (Legacy mode only) | `4000000` |
-| `WORK_UNIT_QUEUE_DEPTH_MAX` | Max queue depth (Legacy mode only) | `8000000` |
 | `WORK_UNIT_ANALYSIS_TYPE` | Analysis type | `TARGETED` |
 | `STAGE_PROGRESSION_FREQ` | How often to check for improvements (ms) | `30000` |
 
