@@ -83,6 +83,18 @@ public class RamseyConfig {
          * BASIC, SINGLE_EDGE_CARDINALITY, DUAL_EDGE_CARDINALITY
          */
         private String defaultWorkEnumerationStrategy;
+
+        /**
+         * Number of top results to track per stage for exhaustion fallback.
+         * Default: 10
+         */
+        private Integer topResultsCount = 10;
+
+        /**
+         * Delay in milliseconds after stage exhaustion before progressing.
+         * Allows in-flight work to complete. Default: 60000 (60 seconds)
+         */
+        private Long exhaustionDelayMs = 60000L;
     }
 
 }
