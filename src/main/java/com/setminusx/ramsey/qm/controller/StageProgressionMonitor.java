@@ -72,11 +72,22 @@ public class StageProgressionMonitor {
         if (!topResults.isEmpty()) {
             BestResult best = topResults.getFirst();
             if (best.getCliqueCount() < baseGraph.getCliqueCount()) {
-                log.info("IMPROVEMENT FOUND! Stage {} base graph has {} cliques, best result has {}",
-                        stageId, baseGraph.getCliqueCount(), best.getCliqueCount());
-                exhaustionDetectedAt.remove(stageId); // Clear any exhaustion tracking
-                progressStage(currentStage, baseGraph, best, true);
-                return;
+                // CRITICAL: Check if this improvement would revert to a previously processed
+                // graph
+                // This prevents oscillation when exhaustion handling picks a worse graph
+                String graphHash = GraphHashUtil.computeDerivedGraphHash(baseGraph, best.getEdgesToFlip());
+
+                if (redisQueueService.isGraphAlreadyProcessed(graphHash)) {
+                    log.info("Improvement found (cliques={}) but graph already processed, treating as exhaustion case",
+                            best.getCliqueCount());
+                    // Fall through to exhaustion handling instead of progressing
+                } else {
+                    log.info("IMPROVEMENT FOUND! Stage {} base graph has {} cliques, best result has {}",
+                            stageId, baseGraph.getCliqueCount(), best.getCliqueCount());
+                    exhaustionDetectedAt.remove(stageId); // Clear any exhaustion tracking
+                    progressStageWithHash(currentStage, baseGraph, best, graphHash);
+                    return;
+                }
             }
         }
 
@@ -141,12 +152,6 @@ public class StageProgressionMonitor {
                 stageId, topResults.size());
         exhaustionDetectedAt.remove(stageId);
         // TODO: Could mark campaign as STUCK or send alert
-    }
-
-    private void progressStage(Stage currentStage, Graph baseGraph, BestResult bestResult, boolean isImprovement) {
-        // Compute graph hash if not provided (for improvement case)
-        String graphHash = GraphHashUtil.computeDerivedGraphHash(baseGraph, bestResult.getEdgesToFlip());
-        progressStageWithHash(currentStage, baseGraph, bestResult, graphHash);
     }
 
     private void progressStageWithHash(Stage currentStage, Graph baseGraph, BestResult bestResult, String graphHash) {
