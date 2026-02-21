@@ -10,10 +10,12 @@ import tools.jackson.databind.ObjectMapper;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Service for managing the Redis work queue.
@@ -24,8 +26,10 @@ public class RedisQueueService {
 
     private static final String QUEUE_KEY_PREFIX = "work_queue:";
     private static final String BEST_RESULT_KEY_PREFIX = "best_result:";
+    private static final String BEST_RESULTS_KEY_PREFIX = "best_results:"; // Sorted set for top-N
     private static final String STAGE_WORK_INDEX_PREFIX = "stage_work_index:";
     private static final String STAGE_CONFIG_PREFIX = "stage_config:";
+    private static final String PROCESSED_GRAPH_HASHES_KEY = "processed_graph_hashes";
 
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
@@ -186,6 +190,127 @@ public class RedisQueueService {
 
     private String getBestResultKey(Integer stageId) {
         return BEST_RESULT_KEY_PREFIX + stageId;
+    }
+
+    private String getBestResultsKey(Integer stageId) {
+        return BEST_RESULTS_KEY_PREFIX + stageId;
+    }
+
+    // ========== Top-N Best Results (Sorted Set) ==========
+
+    /**
+     * Get top N best results for a stage from the sorted set.
+     * Results are ordered by clique count ascending (best first).
+     */
+    public List<BestResult> getTopResults(Integer stageId, int maxResults) {
+        String key = getBestResultsKey(stageId);
+        Set<String> results = redisTemplate.opsForZSet().range(key, 0, maxResults - 1);
+
+        if (results == null || results.isEmpty()) {
+            return List.of();
+        }
+
+        List<BestResult> bestResults = new ArrayList<>();
+        for (String json : results) {
+            try {
+                BestResult result = objectMapper.readValue(json, BestResult.class);
+                bestResults.add(result);
+            } catch (Exception e) {
+                log.error("Failed to deserialize best result from sorted set: {}", json, e);
+            }
+        }
+        return bestResults;
+    }
+
+    /**
+     * Delete the top-N results sorted set for a stage.
+     */
+    public void deleteTopResults(Integer stageId) {
+        String key = getBestResultsKey(stageId);
+        redisTemplate.delete(key);
+        log.info("Deleted top results sorted set for stage {}", stageId);
+    }
+
+    // ========== Stage Exhaustion Detection ==========
+
+    /**
+     * Check if a stage is exhausted (all work has been claimed).
+     * Returns true if stage_work_index >= totalPairs from stage config.
+     */
+    public boolean isStageExhausted(Integer stageId) {
+        String configKey = STAGE_CONFIG_PREFIX + stageId;
+        String configJson = redisTemplate.opsForValue().get(configKey);
+
+        if (configJson == null) {
+            return false;
+        }
+
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> config = objectMapper.readValue(configJson, Map.class);
+            Object totalPairsObj = config.get("totalPairs");
+            if (totalPairsObj == null) {
+                return false;
+            }
+            long totalPairs = ((Number) totalPairsObj).longValue();
+            long claimed = getStageWorkIndex(stageId);
+            return claimed >= totalPairs;
+        } catch (Exception e) {
+            log.error("Failed to parse stage config for exhaustion check: {}", stageId, e);
+            return false;
+        }
+    }
+
+    /**
+     * Get totalPairs from stage config.
+     */
+    public Optional<Long> getTotalPairs(Integer stageId) {
+        String configKey = STAGE_CONFIG_PREFIX + stageId;
+        String configJson = redisTemplate.opsForValue().get(configKey);
+
+        if (configJson == null) {
+            return Optional.empty();
+        }
+
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> config = objectMapper.readValue(configJson, Map.class);
+            Object totalPairsObj = config.get("totalPairs");
+            if (totalPairsObj == null) {
+                return Optional.empty();
+            }
+            return Optional.of(((Number) totalPairsObj).longValue());
+        } catch (Exception e) {
+            log.error("Failed to parse stage config for totalPairs: {}", stageId, e);
+            return Optional.empty();
+        }
+    }
+
+    // ========== Processed Graph Hash Tracking ==========
+
+    /**
+     * Add a graph hash to the set of processed graphs.
+     * Used to prevent revisiting graphs that have already been used as base graphs.
+     */
+    public void addProcessedGraphHash(String graphHash) {
+        redisTemplate.opsForSet().add(PROCESSED_GRAPH_HASHES_KEY, graphHash);
+        log.info("Added processed graph hash: {}", graphHash);
+    }
+
+    /**
+     * Check if a graph hash has already been processed.
+     */
+    public boolean isGraphAlreadyProcessed(String graphHash) {
+        Boolean isMember = redisTemplate.opsForSet().isMember(PROCESSED_GRAPH_HASHES_KEY, graphHash);
+        return Boolean.TRUE.equals(isMember);
+    }
+
+    /**
+     * Get all processed graph hashes (for debugging/monitoring).
+     */
+    public Set<String> getAllProcessedGraphHashes() {
+        Set<String> members = redisTemplate.opsForSet().members(PROCESSED_GRAPH_HASHES_KEY);
+        return members != null ? members : Set.of();
     }
 
 }

@@ -7,17 +7,22 @@ import com.setminusx.ramsey.qm.model.Edge;
 import com.setminusx.ramsey.qm.model.Graph;
 import com.setminusx.ramsey.qm.model.Stage;
 import com.setminusx.ramsey.qm.service.RedisQueueService;
+import com.setminusx.ramsey.qm.utility.GraphHashUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.time.Instant;
 import java.util.List;
-import java.util.Optional;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 /**
  * Monitors for improved results and triggers stage progression.
- * When a worker finds a graph with fewer cliques, this creates a new stage.
+ * Handles two scenarios:
+ * 1. Improvement found: best result has fewer cliques than base graph
+ * 2. Stage exhausted: all work claimed, picks best unprocessed result
  */
 @Slf4j
 @Component
@@ -26,6 +31,9 @@ public class StageProgressionMonitor {
     private final MiddlewareClient middlewareClient;
     private final RedisQueueService redisQueueService;
     private final RamseyConfig ramseyConfig;
+
+    // Track when each stage was first detected as exhausted
+    private final Map<Integer, Instant> exhaustionDetectedAt = new ConcurrentHashMap<>();
 
     public StageProgressionMonitor(
             MiddlewareClient middlewareClient,
@@ -52,41 +60,101 @@ public class StageProgressionMonitor {
         Stage currentStage = stages.getFirst();
         Integer stageId = currentStage.getStageId();
 
-        // Check for best result in Redis
-        Optional<BestResult> bestResultOpt = redisQueueService.getBestResult(stageId);
-        if (bestResultOpt.isEmpty()) {
-            log.debug("No best result found for stage {}", stageId);
-            return;
-        }
-
-        BestResult bestResult = bestResultOpt.get();
-
-        // Get current base graph to compare
+        // Get current base graph
         Graph baseGraph = middlewareClient.getGraphById(currentStage.getBaseGraphId());
         if (baseGraph == null || baseGraph.getCliqueCount() == null) {
             log.warn("Could not fetch base graph or clique count for stage {}", stageId);
             return;
         }
 
-        // Compare: is the best result actually better?
-        if (bestResult.getCliqueCount() >= baseGraph.getCliqueCount()) {
-            log.debug("Best result {} is not better than base graph {}",
-                    bestResult.getCliqueCount(), baseGraph.getCliqueCount());
-            return;
+        // SCENARIO 1: Check for improvement (best result better than base)
+        List<BestResult> topResults = redisQueueService.getTopResults(stageId, 1);
+        if (!topResults.isEmpty()) {
+            BestResult best = topResults.getFirst();
+            if (best.getCliqueCount() < baseGraph.getCliqueCount()) {
+                // CRITICAL: Check if this improvement would revert to a previously processed
+                // graph
+                // This prevents oscillation when exhaustion handling picks a worse graph
+                String graphHash = GraphHashUtil.computeDerivedGraphHash(baseGraph, best.getEdgesToFlip());
+
+                if (redisQueueService.isGraphAlreadyProcessed(graphHash)) {
+                    log.info("Improvement found (cliques={}) but graph already processed, treating as exhaustion case",
+                            best.getCliqueCount());
+                    // Fall through to exhaustion handling instead of progressing
+                } else {
+                    log.info("IMPROVEMENT FOUND! Stage {} base graph has {} cliques, best result has {}",
+                            stageId, baseGraph.getCliqueCount(), best.getCliqueCount());
+                    exhaustionDetectedAt.remove(stageId); // Clear any exhaustion tracking
+                    progressStageWithHash(currentStage, baseGraph, best, graphHash);
+                    return;
+                }
+            }
         }
 
-        // Found improvement! Trigger stage progression
-        log.info("IMPROVEMENT FOUND! Stage {} base graph has {} cliques, best result has {}",
-                stageId, baseGraph.getCliqueCount(), bestResult.getCliqueCount());
-
-        try {
-            progressStage(currentStage, baseGraph, bestResult);
-        } catch (Exception e) {
-            log.error("Failed to progress stage: {}", e.getMessage(), e);
+        // SCENARIO 2: Check for exhaustion
+        if (redisQueueService.isStageExhausted(stageId)) {
+            handleExhaustedStage(currentStage, baseGraph, stageId);
+        } else {
+            // Not exhausted yet, clear any stale exhaustion tracking
+            exhaustionDetectedAt.remove(stageId);
         }
     }
 
-    private void progressStage(Stage currentStage, Graph baseGraph, BestResult bestResult) {
+    /**
+     * Handle an exhausted stage - wait for delay, then pick best unprocessed
+     * result.
+     */
+    private void handleExhaustedStage(Stage currentStage, Graph baseGraph, Integer stageId) {
+        Long delayMs = ramseyConfig.getStage().getExhaustionDelayMs();
+
+        // Track when exhaustion was first detected
+        Instant detectedAt = exhaustionDetectedAt.computeIfAbsent(stageId, k -> {
+            log.info("Stage {} exhausted, starting {}ms delay before progression...", stageId, delayMs);
+            return Instant.now();
+        });
+
+        // Check if delay has passed
+        long elapsedMs = Instant.now().toEpochMilli() - detectedAt.toEpochMilli();
+        if (elapsedMs < delayMs) {
+            log.debug("Stage {} exhaustion delay: {}ms / {}ms elapsed", stageId, elapsedMs, delayMs);
+            return;
+        }
+
+        log.info("Stage {} exhaustion delay complete, selecting best unprocessed result...", stageId);
+
+        // Get top N results
+        int topCount = ramseyConfig.getStage().getTopResultsCount();
+        List<BestResult> topResults = redisQueueService.getTopResults(stageId, topCount);
+
+        if (topResults.isEmpty()) {
+            log.warn("Stage {} exhausted but no results in sorted set! Cannot progress.", stageId);
+            exhaustionDetectedAt.remove(stageId);
+            return;
+        }
+
+        // Find the first unprocessed result
+        for (BestResult result : topResults) {
+            String graphHash = GraphHashUtil.computeDerivedGraphHash(baseGraph, result.getEdgesToFlip());
+
+            if (!redisQueueService.isGraphAlreadyProcessed(graphHash)) {
+                log.info("Progressing exhausted stage {} to best unprocessed result: cliques={}",
+                        stageId, result.getCliqueCount());
+                exhaustionDetectedAt.remove(stageId);
+                progressStageWithHash(currentStage, baseGraph, result, graphHash);
+                return;
+            } else {
+                log.debug("Result with cliques={} already processed, skipping", result.getCliqueCount());
+            }
+        }
+
+        // All top results have been processed
+        log.warn("Stage {} exhausted and ALL {} top results already processed! System is stuck.",
+                stageId, topResults.size());
+        exhaustionDetectedAt.remove(stageId);
+        // TODO: Could mark campaign as STUCK or send alert
+    }
+
+    private void progressStageWithHash(Stage currentStage, Graph baseGraph, BestResult bestResult, String graphHash) {
         // 1. Get derived graph from middleware
         String edgesToFlipStr = formatEdgesForUrl(bestResult.getEdgesToFlip());
         log.info("Getting derived graph from base {} with edges {}",
@@ -103,17 +171,20 @@ public class StageProgressionMonitor {
         // 2. Set the clique count on the derived graph
         derivedGraph.setCliqueCount(bestResult.getCliqueCount());
 
-        // 3. Save the derived graph to DB
+        // 3. Record the graph hash as processed (before creating to avoid race)
+        redisQueueService.addProcessedGraphHash(graphHash);
+
+        // 4. Save the derived graph to DB
         log.info("Saving derived graph with clique count {}", bestResult.getCliqueCount());
         Graph savedGraph = middlewareClient.createGraph(derivedGraph);
         log.info("Created new graph with ID: {}", savedGraph.getGraphId());
 
-        // 4. Mark current stage as INACTIVE
+        // 5. Mark current stage as INACTIVE
         log.info("Marking stage {} as INACTIVE", currentStage.getStageId());
         currentStage.setStatus(Stage.Status.INACTIVE);
         middlewareClient.updateStage(currentStage);
 
-        // 5. Create new active stage with default enumeration strategy
+        // 6. Create new active stage with default enumeration strategy
         Stage newStage = new Stage();
         newStage.setStatus(Stage.Status.ACTIVE);
         newStage.setBaseGraphId(savedGraph.getGraphId());
@@ -130,16 +201,17 @@ public class StageProgressionMonitor {
         log.info("Created new stage {} with base graph {}",
                 createdStage.getStageId(), savedGraph.getGraphId());
 
-        // 6. Initialize counter-based mode for new stage (before clearing old stage)
+        // 7. Initialize counter-based mode for new stage (before clearing old stage)
         if (createdStage.getWorkEnumerationStrategy() != null) {
             initializeRedisForStage(createdStage, savedGraph);
         }
 
-        // 7. Clear Redis queue and counter keys for old stage
-        log.info("Clearing Redis queue, counter keys, and best result for old stage {}", currentStage.getStageId());
+        // 8. Clear Redis queue and counter keys for old stage
+        log.info("Clearing Redis keys for old stage {}", currentStage.getStageId());
         redisQueueService.clearQueue(currentStage.getStageId());
         redisQueueService.clearStageCounter(currentStage.getStageId());
         redisQueueService.deleteBestResult(currentStage.getStageId());
+        redisQueueService.deleteTopResults(currentStage.getStageId());
 
         log.info("Stage progression complete! New stage {} is now active", createdStage.getStageId());
     }
