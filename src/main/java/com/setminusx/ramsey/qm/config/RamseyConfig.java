@@ -95,6 +95,13 @@ public class RamseyConfig {
          * Allows in-flight work to complete. Default: 60000 (60 seconds)
          */
         private Long exhaustionDelayMs = 60000L;
+
+        /**
+         * Number of recent stages to re-seed into processed_graph_hashes on Redis recovery.
+         * Higher values give stronger cycle protection at the cost of more DB fetches on restart.
+         * Default: 50
+         */
+        private Integer cyclePreventionGraphLookbackCount = 50;
     }
 
 }

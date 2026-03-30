@@ -78,6 +78,20 @@ public class MiddlewareClient {
 
     }
 
+    public List<Stage> getRecentStagesByCampaignIdAndStatus(Integer campaignId, Stage.Status status, int count) {
+
+        String getStageUri = UriComponentsBuilder.fromUriString(stageUrl)
+                .queryParam("campaignId", campaignId)
+                .queryParam("status", status)
+                .queryParam("count", count)
+                .toUriString();
+
+        return Optional.ofNullable(restTemplate.getForObject(getStageUri, Stage[].class))
+                .map(Arrays::asList)
+                .orElse(Collections.emptyList());
+
+    }
+
     public void updateStage(Stage stage) {
         restTemplate.put(stageUrl + "/" + stage.getStageId(), stage);
     }
