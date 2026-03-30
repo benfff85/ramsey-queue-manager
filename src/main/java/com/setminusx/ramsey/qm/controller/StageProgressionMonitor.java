@@ -247,6 +247,12 @@ public class StageProgressionMonitor {
         if (stage.getWorkEnumerationStrategy() != null) {
             checkAndInitializeStage(stage);
         }
+
+        // Re-seed processed graph hashes independently — handles the case where only
+        // that key was lost while stage_config remained intact
+        if (redisQueueService.isProcessedGraphHashesEmpty()) {
+            reseedProcessedGraphHashes(stage.getCampaignId());
+        }
     }
 
     private void checkAndInitializeStage(Stage stage) {
@@ -266,11 +272,6 @@ public class StageProgressionMonitor {
         }
 
         initializeRedisForStage(stage, graph);
-
-        // Re-seed processed graph hashes if they were also lost (prevents cycles after Redis wipe)
-        if (redisQueueService.isProcessedGraphHashesEmpty()) {
-            reseedProcessedGraphHashes(stage.getCampaignId());
-        }
     }
 
     /**
