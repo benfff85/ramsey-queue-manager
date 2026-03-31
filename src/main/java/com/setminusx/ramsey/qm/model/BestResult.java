@@ -20,5 +20,14 @@ public class BestResult {
     private Integer stageId;
     private List<Edge> edgesToFlip;
     private Integer cliqueCount;
+    private String graphBitstring;
+
+    /**
+     * Returns true if this result came from a simulated annealing worker
+     * (identified by having a graphBitstring instead of edgesToFlip).
+     */
+    public boolean isSimulatedAnnealingResult() {
+        return graphBitstring != null && !graphBitstring.isBlank();
+    }
 
 }
