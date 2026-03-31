@@ -247,6 +247,12 @@ public class StageProgressionMonitor {
         if (stage.getWorkEnumerationStrategy() != null) {
             checkAndInitializeStage(stage);
         }
+
+        // Re-seed processed graph hashes independently — handles the case where only
+        // that key was lost while stage_config remained intact
+        if (redisQueueService.isProcessedGraphHashesEmpty()) {
+            reseedProcessedGraphHashes(stage.getCampaignId());
+        }
     }
 
     private void checkAndInitializeStage(Stage stage) {
@@ -266,6 +272,31 @@ public class StageProgressionMonitor {
         }
 
         initializeRedisForStage(stage, graph);
+    }
+
+    /**
+     * Re-seeds the processed_graph_hashes set from MySQL after Redis data loss.
+     * Fetches the most recent INACTIVE stages (up to top-results-count) and adds
+     * their base graph hashes, preventing the system from revisiting already-exhausted graphs.
+     */
+    private void reseedProcessedGraphHashes(Integer campaignId) {
+        int count = ramseyConfig.getStage().getCyclePreventionGraphLookbackCount();
+        log.info("Re-seeding processed_graph_hashes from last {} INACTIVE stages for campaign {}...", count, campaignId);
+
+        List<Stage> recentStages = middlewareClient.getRecentStagesByCampaignIdAndStatus(
+                campaignId, Stage.Status.INACTIVE, count);
+
+        int seeded = 0;
+        for (Stage stage : recentStages) {
+            Graph graph = middlewareClient.getGraphById(stage.getBaseGraphId());
+            if (graph != null && graph.getEdgeData() != null) {
+                String hash = GraphHashUtil.computeHash(graph.getEdgeData());
+                redisQueueService.addProcessedGraphHash(hash);
+                seeded++;
+            }
+        }
+
+        log.info("Re-seeded {} processed graph hashes from recent stage history", seeded);
     }
 
     private void initializeRedisForStage(Stage stage, Graph graph) {

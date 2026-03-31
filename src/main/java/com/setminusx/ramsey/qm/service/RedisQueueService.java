@@ -313,4 +313,12 @@ public class RedisQueueService {
         return members != null ? members : Set.of();
     }
 
+    /**
+     * Check if the processed graph hashes set is empty (e.g., after Redis data loss).
+     */
+    public boolean isProcessedGraphHashesEmpty() {
+        Long size = redisTemplate.opsForSet().size(PROCESSED_GRAPH_HASHES_KEY);
+        return size == null || size == 0;
+    }
+
 }

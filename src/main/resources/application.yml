@@ -15,3 +15,4 @@ ramsey:
   stage:
     top-results-count: ${TOP_RESULTS_COUNT:10}
     exhaustion-delay-ms: ${EXHAUSTION_DELAY_MS:60000}
+    cycle-prevention-graph-lookback-count: ${CYCLE_PREVENTION_GRAPH_LOOKBACK_COUNT:50}
