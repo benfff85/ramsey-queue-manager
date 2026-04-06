@@ -75,15 +75,21 @@ public class StageProgressionMonitor {
                 // CRITICAL: Check if this improvement would revert to a previously processed
                 // graph
                 // This prevents oscillation when exhaustion handling picks a worse graph
-                String graphHash = GraphHashUtil.computeDerivedGraphHash(baseGraph, best.getEdgesToFlip());
+                String graphHash;
+                if (best.isSimulatedAnnealingResult()) {
+                    graphHash = GraphHashUtil.computeHash(best.getGraphBitstring());
+                } else {
+                    graphHash = GraphHashUtil.computeDerivedGraphHash(baseGraph, best.getEdgesToFlip());
+                }
 
                 if (redisQueueService.isGraphAlreadyProcessed(graphHash)) {
                     log.info("Improvement found (cliques={}) but graph already processed, treating as exhaustion case",
                             best.getCliqueCount());
                     // Fall through to exhaustion handling instead of progressing
                 } else {
-                    log.info("IMPROVEMENT FOUND! Stage {} base graph has {} cliques, best result has {}",
-                            stageId, baseGraph.getCliqueCount(), best.getCliqueCount());
+                    log.info("IMPROVEMENT FOUND! Stage {} base graph has {} cliques, best result has {} (source: {})",
+                            stageId, baseGraph.getCliqueCount(), best.getCliqueCount(),
+                            best.isSimulatedAnnealingResult() ? "SA" : "EXHAUSTIVE");
                     exhaustionDetectedAt.remove(stageId); // Clear any exhaustion tracking
                     progressStageWithHash(currentStage, baseGraph, best, graphHash);
                     return;
@@ -134,7 +140,9 @@ public class StageProgressionMonitor {
 
         // Find the first unprocessed result
         for (BestResult result : topResults) {
-            String graphHash = GraphHashUtil.computeDerivedGraphHash(baseGraph, result.getEdgesToFlip());
+            String graphHash = result.isSimulatedAnnealingResult()
+                    ? GraphHashUtil.computeHash(result.getGraphBitstring())
+                    : GraphHashUtil.computeDerivedGraphHash(baseGraph, result.getEdgesToFlip());
 
             if (!redisQueueService.isGraphAlreadyProcessed(graphHash)) {
                 log.info("Progressing exhausted stage {} to best unprocessed result: cliques={}",
@@ -155,17 +163,29 @@ public class StageProgressionMonitor {
     }
 
     private void progressStageWithHash(Stage currentStage, Graph baseGraph, BestResult bestResult, String graphHash) {
-        // 1. Get derived graph from middleware
-        String edgesToFlipStr = formatEdgesForUrl(bestResult.getEdgesToFlip());
-        log.info("Getting derived graph from base {} with edges {}",
-                bestResult.getBaseGraphId(), edgesToFlipStr);
+        // 1. Get or construct the derived graph
+        Graph derivedGraph;
+        String source;
 
-        Graph derivedGraph = middlewareClient.getDerivedGraph(
-                bestResult.getBaseGraphId(), edgesToFlipStr);
+        if (bestResult.isSimulatedAnnealingResult()) {
+            log.info("Progressing via SIMULATED_ANNEALING result from base graph {}", bestResult.getBaseGraphId());
+            source = "SIMULATED_ANNEALING";
+            derivedGraph = new Graph();
+            derivedGraph.setEdgeData(bestResult.getGraphBitstring());
+            derivedGraph.setVertexCount(baseGraph.getVertexCount());
+            derivedGraph.setSubgraphSize(baseGraph.getSubgraphSize());
+        } else {
+            String edgesToFlipStr = formatEdgesForUrl(bestResult.getEdgesToFlip());
+            log.info("Progressing via EXHAUSTIVE result from base {} with edges {}",
+                    bestResult.getBaseGraphId(), edgesToFlipStr);
+            source = "EXHAUSTIVE";
+            derivedGraph = middlewareClient.getDerivedGraph(
+                    bestResult.getBaseGraphId(), edgesToFlipStr);
 
-        if (derivedGraph == null) {
-            log.error("Failed to get derived graph");
-            return;
+            if (derivedGraph == null) {
+                log.error("Failed to get derived graph");
+                return;
+            }
         }
 
         // 2. Set the clique count on the derived graph
@@ -189,6 +209,7 @@ public class StageProgressionMonitor {
         newStage.setStatus(Stage.Status.ACTIVE);
         newStage.setBaseGraphId(savedGraph.getGraphId());
         newStage.setCampaignId(currentStage.getCampaignId());
+        newStage.setDetails("source: " + source);
 
         // Apply default work enumeration strategy if configured
         String defaultStrategy = ramseyConfig.getStage().getDefaultWorkEnumerationStrategy();
@@ -198,8 +219,8 @@ public class StageProgressionMonitor {
         }
 
         Stage createdStage = middlewareClient.createStage(newStage);
-        log.info("Created new stage {} with base graph {}",
-                createdStage.getStageId(), savedGraph.getGraphId());
+        log.info("Created new stage {} with base graph {} (source: {})",
+                createdStage.getStageId(), savedGraph.getGraphId(), source);
 
         // 7. Initialize counter-based mode for new stage (before clearing old stage)
         if (createdStage.getWorkEnumerationStrategy() != null) {
