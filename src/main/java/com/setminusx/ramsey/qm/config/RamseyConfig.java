@@ -15,10 +15,8 @@ public class RamseyConfig {
     private Integer vertexCount;
     private Integer subgraphSize;
     private Integer campaignId;
-    private String clientId;
 
     private Mw mw;
-    private Client client;
     private Graph graph;
     private WorkUnit workUnit;
     private Campaign campaign;
@@ -27,29 +25,6 @@ public class RamseyConfig {
     @Data
     public static class Mw {
         private String host;
-    }
-
-    @Data
-    public static class Client {
-        private String url;
-        private Registration registration;
-
-        @Data
-        public static class Registration {
-            private PhoneHome phoneHome;
-            private Timeout timeout;
-
-            @Data
-            public static class PhoneHome {
-                private Long frequencyInMillis;
-            }
-
-            @Data
-            public static class Timeout {
-                private Long frequencyInMillis;
-                private Long thresholdInMinutes;
-            }
-        }
     }
 
     @Data
