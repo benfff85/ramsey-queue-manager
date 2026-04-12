@@ -44,13 +44,6 @@ Runs at an interval defined by `ramsey.stage-progression.frequency-in-millis` (d
   4. Creates new stage with the improved graph
   5. Clears Redis queue and best_result key
 
-### Client Monitor
-
-Monitors client health and marks inactive clients.
-
-- Checks all active clients' last phone home time
-- Marks clients as INACTIVE if they haven't phoned home within threshold
-
 ## Redis Key Format
 
 **Work Queue:** `work_queue:{stageId}` (List)

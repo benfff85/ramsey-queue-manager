@@ -1,14 +1,6 @@
 ramsey:
   mw:
     host: "http://localhost:36000"
-  client:
-    url: ${ramsey.mw.host}/api/ramsey/clients
-    registration:
-      phone-home:
-        frequency-in-millis: 60000
-      timeout:
-        frequency-in-millis: 60000
-        threshold-in-minutes: 5
   graph:
     url: ${ramsey.mw.host}/api/ramsey/graphs
   work-unit:
