@@ -15,12 +15,12 @@ class StageProgressionMonitorTest {
     }
 
     @Test
-    void singlesStrategyAddsMajorityColorCount() {
-        // Stage 8319 shape: 19,810 red / 19,811 blue -> majority blue.
-        assertEquals(19811L + 19810L * 19811L,
+    void singlesStrategyAddsBothColorCounts() {
+        // Stage 8319 shape: 19,810 red / 19,811 blue -> 39,621 singles.
+        assertEquals(39621L + 19810L * 19811L,
                 StageProgressionMonitor.computeTotalWorkUnits(19810, 19811, "DUAL_EDGE_CARDINALITY_WITH_SINGLES"));
-        // Majority red mirror.
-        assertEquals(19811L + 19811L * 19810L,
+        // Mirrored balance gives the identical total.
+        assertEquals(39621L + 19811L * 19810L,
                 StageProgressionMonitor.computeTotalWorkUnits(19811, 19810, "DUAL_EDGE_CARDINALITY_WITH_SINGLES"));
     }
 
