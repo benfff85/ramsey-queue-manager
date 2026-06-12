@@ -239,16 +239,15 @@ public class StageProgressionMonitor {
 
     /**
      * Total work units for a stage. Pair strategies use redCount * blueCount.
-     * DUAL_EDGE_CARDINALITY_WITH_SINGLES prepends one work unit per
-     * majority-color edge (both colors when tied) — this MUST match the Rust
-     * worker's DualCardinalityWithSinglesEnumerator; the worker refuses the
-     * stage if the totals disagree.
+     * DUAL_EDGE_CARDINALITY_WITH_SINGLES prepends one work unit per edge of
+     * EITHER color (singles = redCount + blueCount) — this MUST match the
+     * Rust worker's DualCardinalityWithSinglesEnumerator; the worker refuses
+     * the stage if the totals disagree.
      */
     static long computeTotalWorkUnits(long redCount, long blueCount, String strategy) {
         long pairs = redCount * blueCount;
         if ("DUAL_EDGE_CARDINALITY_WITH_SINGLES".equals(strategy)) {
-            long singles = (redCount == blueCount) ? redCount + blueCount : Math.max(redCount, blueCount);
-            return singles + pairs;
+            return redCount + blueCount + pairs;
         }
         return pairs;
     }
