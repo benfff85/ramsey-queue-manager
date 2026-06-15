@@ -29,6 +29,7 @@ public class RedisQueueService {
     private static final String BEST_RESULTS_KEY_PREFIX = "best_results:"; // Sorted set for top-N
     private static final String STAGE_WORK_INDEX_PREFIX = "stage_work_index:";
     private static final String STAGE_CONFIG_PREFIX = "stage_config:";
+    private static final String PROCESSED_COUNT_PREFIX = "processed_count:";
     private static final String PROCESSED_GRAPH_HASHES_KEY = "processed_graph_hashes";
 
     private final StringRedisTemplate redisTemplate;
@@ -86,6 +87,35 @@ public class RedisQueueService {
         String indexKey = STAGE_WORK_INDEX_PREFIX + stageId;
         String value = redisTemplate.opsForValue().get(indexKey);
         return value != null ? Long.parseLong(value) : 0L;
+    }
+
+    /**
+     * Number of work units actually processed (evaluated and results submitted) for a stage.
+     * Workers increment this only after submitting their batch results, so when it reaches
+     * totalPairs every result is already published — no in-flight stragglers remain.
+     */
+    public long getProcessedCount(Integer stageId) {
+        String value = redisTemplate.opsForValue().get(PROCESSED_COUNT_PREFIX + stageId);
+        return value != null ? Long.parseLong(value) : 0L;
+    }
+
+    /**
+     * Total work units for a stage from its Redis config, or -1 if unknown/uninitialized.
+     */
+    public long getStageTotalPairs(Integer stageId) {
+        String configJson = redisTemplate.opsForValue().get(STAGE_CONFIG_PREFIX + stageId);
+        if (configJson == null) {
+            return -1L;
+        }
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> config = objectMapper.readValue(configJson, Map.class);
+            Object totalPairsObj = config.get("totalPairs");
+            return totalPairsObj == null ? -1L : ((Number) totalPairsObj).longValue();
+        } catch (Exception e) {
+            log.error("Failed to parse stage config for totalPairs: {}", stageId, e);
+            return -1L;
+        }
     }
 
     /**
@@ -238,27 +268,8 @@ public class RedisQueueService {
      * Returns true if stage_work_index >= totalPairs from stage config.
      */
     public boolean isStageExhausted(Integer stageId) {
-        String configKey = STAGE_CONFIG_PREFIX + stageId;
-        String configJson = redisTemplate.opsForValue().get(configKey);
-
-        if (configJson == null) {
-            return false;
-        }
-
-        try {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> config = objectMapper.readValue(configJson, Map.class);
-            Object totalPairsObj = config.get("totalPairs");
-            if (totalPairsObj == null) {
-                return false;
-            }
-            long totalPairs = ((Number) totalPairsObj).longValue();
-            long claimed = getStageWorkIndex(stageId);
-            return claimed >= totalPairs;
-        } catch (Exception e) {
-            log.error("Failed to parse stage config for exhaustion check: {}", stageId, e);
-            return false;
-        }
+        long totalPairs = getStageTotalPairs(stageId);
+        return totalPairs > 0 && getStageWorkIndex(stageId) >= totalPairs;
     }
 
     /**
