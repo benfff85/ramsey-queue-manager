@@ -111,22 +111,34 @@ public class StageProgressionMonitor {
      * result.
      */
     private void handleExhaustedStage(Stage currentStage, Graph baseGraph, Integer stageId) {
-        Long delayMs = ramseyConfig.getStage().getExhaustionDelayMs();
+        long totalPairs = redisQueueService.getStageTotalPairs(stageId);
+        long processed = redisQueueService.getProcessedCount(stageId);
 
-        // Track when exhaustion was first detected
-        Instant detectedAt = exhaustionDetectedAt.computeIfAbsent(stageId, k -> {
-            log.info("Stage {} exhausted, starting {}ms delay before progression...", stageId, delayMs);
-            return Instant.now();
-        });
-
-        // Check if delay has passed
-        long elapsedMs = Instant.now().toEpochMilli() - detectedAt.toEpochMilli();
-        if (elapsedMs < delayMs) {
-            log.debug("Stage {} exhaustion delay: {}ms / {}ms elapsed", stageId, elapsedMs, delayMs);
-            return;
+        if (isFullyProcessed(processed, totalPairs)) {
+            // All claimed work units have been processed AND their results published (workers
+            // increment processed_count only after submitting), so there are no in-flight
+            // stragglers to wait for. Skip the exhaustion delay and advance immediately.
+            exhaustionDetectedAt.remove(stageId);
+            log.info("Stage {} fully processed ({}/{}) — advancing without exhaustion delay", stageId, processed, totalPairs);
+        } else {
+            // Work is fully claimed but not fully processed — likely a restarted/in-flight worker
+            // whose claimed units may never report. We cannot wait on processed_count forever, so
+            // wait out the exhaustion delay, then fall back to the best published result.
+            Long delayMs = ramseyConfig.getStage().getExhaustionDelayMs();
+            Instant detectedAt = exhaustionDetectedAt.computeIfAbsent(stageId, k -> {
+                log.info("Stage {} claimed-exhausted but only {}/{} processed; starting {}ms straggler delay...",
+                        stageId, processed, totalPairs, delayMs);
+                return Instant.now();
+            });
+            long elapsedMs = Instant.now().toEpochMilli() - detectedAt.toEpochMilli();
+            if (elapsedMs < delayMs) {
+                log.debug("Stage {} straggler delay: {}ms / {}ms elapsed ({}/{} processed)",
+                        stageId, elapsedMs, delayMs, processed, totalPairs);
+                return;
+            }
+            log.info("Stage {} straggler delay complete ({}/{} processed), selecting best unprocessed result...",
+                    stageId, processed, totalPairs);
         }
-
-        log.info("Stage {} exhaustion delay complete, selecting best unprocessed result...", stageId);
 
         // Get top N results
         int topCount = ramseyConfig.getStage().getTopResultsCount();
@@ -250,6 +262,16 @@ public class StageProgressionMonitor {
             return redCount + blueCount + pairs;
         }
         return pairs;
+    }
+
+    /**
+     * True when every work unit of an exhausted (fully-claimed) stage has also been processed
+     * and published, so the stage can advance immediately without waiting out the exhaustion
+     * delay. Requires a known positive total; processedCount may slightly exceed totalPairs on
+     * the final partial batch, hence the >= comparison.
+     */
+    static boolean isFullyProcessed(long processedCount, long totalPairs) {
+        return totalPairs > 0 && processedCount >= totalPairs;
     }
 
     /**

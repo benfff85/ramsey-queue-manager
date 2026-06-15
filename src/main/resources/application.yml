@@ -12,6 +12,8 @@ spring:
 
 ramsey:
   campaign-id: 1
+  stage-progression:
+    frequency-in-millis: ${STAGE_PROGRESSION_FREQUENCY_MS:30000}
   stage:
     top-results-count: ${TOP_RESULTS_COUNT:10}
     exhaustion-delay-ms: ${EXHAUSTION_DELAY_MS:60000}

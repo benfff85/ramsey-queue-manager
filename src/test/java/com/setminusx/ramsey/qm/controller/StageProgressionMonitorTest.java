@@ -3,6 +3,8 @@ package com.setminusx.ramsey.qm.controller;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class StageProgressionMonitorTest {
 
@@ -33,5 +35,27 @@ class StageProgressionMonitorTest {
     @Test
     void nullStrategyFallsBackToPairs() {
         assertEquals(25L, StageProgressionMonitor.computeTotalWorkUnits(5, 5, null));
+    }
+
+    @Test
+    void fullyProcessedWhenProcessedReachesTotal() {
+        long total = 39621L + 19812L * 19809L; // a real WITH_SINGLES total
+        assertTrue(StageProgressionMonitor.isFullyProcessed(total, total));
+        // Final partial batch can push processed slightly past total.
+        assertTrue(StageProgressionMonitor.isFullyProcessed(total + 250, total));
+    }
+
+    @Test
+    void notFullyProcessedWhileStragglersOutstanding() {
+        long total = 392_495_529L;
+        assertFalse(StageProgressionMonitor.isFullyProcessed(total - 1, total));
+        assertFalse(StageProgressionMonitor.isFullyProcessed(0L, total));
+    }
+
+    @Test
+    void notFullyProcessedWhenTotalUnknown() {
+        // getStageTotalPairs returns -1 when config is missing; 0 guards uninitialized stages.
+        assertFalse(StageProgressionMonitor.isFullyProcessed(100L, -1L));
+        assertFalse(StageProgressionMonitor.isFullyProcessed(100L, 0L));
     }
 }
