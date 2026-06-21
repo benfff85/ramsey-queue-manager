@@ -77,6 +77,14 @@ public class RamseyConfig {
          * Default: 50
          */
         private Integer cyclePreventionGraphLookbackCount = 50;
+
+        /**
+         * When true (default — current behaviour), a stage advances the moment a result beats
+         * the base graph's clique count. When false, the stage runs to exhaustion and the best
+         * result found across the whole work space is taken at the end.
+         * Env: IMMEDIATELY_PROGRESS_STAGE_ON_IMPROVEMENT
+         */
+        private boolean immediatelyProgressOnImprovement = true;
     }
 
 }
