@@ -67,34 +67,12 @@ public class StageProgressionMonitor {
             return;
         }
 
-        // SCENARIO 1: Check for improvement (best result better than base)
-        List<BestResult> topResults = redisQueueService.getTopResults(stageId, 1);
-        if (!topResults.isEmpty()) {
-            BestResult best = topResults.getFirst();
-            if (best.getCliqueCount() < baseGraph.getCliqueCount()) {
-                // CRITICAL: Check if this improvement would revert to a previously processed
-                // graph
-                // This prevents oscillation when exhaustion handling picks a worse graph
-                String graphHash;
-                if (best.isSimulatedAnnealingResult()) {
-                    graphHash = GraphHashUtil.computeHash(best.getGraphBitstring());
-                } else {
-                    graphHash = GraphHashUtil.computeDerivedGraphHash(baseGraph, best.getEdgesToFlip());
-                }
-
-                if (redisQueueService.isGraphAlreadyProcessed(graphHash)) {
-                    log.info("Improvement found (cliques={}) but graph already processed, treating as exhaustion case",
-                            best.getCliqueCount());
-                    // Fall through to exhaustion handling instead of progressing
-                } else {
-                    log.info("IMPROVEMENT FOUND! Stage {} base graph has {} cliques, best result has {} (source: {})",
-                            stageId, baseGraph.getCliqueCount(), best.getCliqueCount(),
-                            best.isSimulatedAnnealingResult() ? "SA" : "EXHAUSTIVE");
-                    exhaustionDetectedAt.remove(stageId); // Clear any exhaustion tracking
-                    progressStageWithHash(currentStage, baseGraph, best, graphHash);
-                    return;
-                }
-            }
+        // SCENARIO 1: improvement found (best result beats base). Only acted on when immediate
+        // progression is enabled; when disabled the stage runs to exhaustion (SCENARIO 2) and the
+        // best result across the whole work space is taken at the end.
+        if (ramseyConfig.getStage().isImmediatelyProgressOnImprovement()
+                && tryProgressOnImprovement(currentStage, baseGraph, stageId)) {
+            return;
         }
 
         // SCENARIO 2: Check for exhaustion
@@ -104,6 +82,40 @@ public class StageProgressionMonitor {
             // Not exhausted yet, clear any stale exhaustion tracking
             exhaustionDetectedAt.remove(stageId);
         }
+    }
+
+    /**
+     * SCENARIO 1: if the best result beats the base graph and hasn't already been processed,
+     * advance the stage to it. Returns true if the stage was progressed.
+     */
+    private boolean tryProgressOnImprovement(Stage currentStage, Graph baseGraph, Integer stageId) {
+        List<BestResult> topResults = redisQueueService.getTopResults(stageId, 1);
+        if (topResults.isEmpty()) {
+            return false;
+        }
+        BestResult best = topResults.getFirst();
+        if (best.getCliqueCount() >= baseGraph.getCliqueCount()) {
+            return false;
+        }
+
+        // Guard against oscillation: don't progress to a graph we've already processed
+        // (this prevents reverting when exhaustion handling picks a worse graph).
+        String graphHash = best.isSimulatedAnnealingResult()
+                ? GraphHashUtil.computeHash(best.getGraphBitstring())
+                : GraphHashUtil.computeDerivedGraphHash(baseGraph, best.getEdgesToFlip());
+
+        if (redisQueueService.isGraphAlreadyProcessed(graphHash)) {
+            log.info("Improvement found (cliques={}) but graph already processed, treating as exhaustion case",
+                    best.getCliqueCount());
+            return false; // fall through to exhaustion handling
+        }
+
+        log.info("IMPROVEMENT FOUND! Stage {} base graph has {} cliques, best result has {} (source: {})",
+                stageId, baseGraph.getCliqueCount(), best.getCliqueCount(),
+                best.isSimulatedAnnealingResult() ? "SA" : "EXHAUSTIVE");
+        exhaustionDetectedAt.remove(stageId); // Clear any exhaustion tracking
+        progressStageWithHash(currentStage, baseGraph, best, graphHash);
+        return true;
     }
 
     /**
