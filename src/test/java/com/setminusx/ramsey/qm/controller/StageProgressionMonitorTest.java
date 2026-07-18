@@ -17,6 +17,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -82,9 +83,8 @@ class StageProgressionMonitorTest {
         RamseyConfig.Stage stageCfg = new RamseyConfig.Stage();
         stageCfg.setImmediatelyProgressOnImprovement(false); // run to exhaustion
         when(config.getStage()).thenReturn(stageCfg);
-        when(config.getCampaignId()).thenReturn(10);
 
-        when(mw.getStagesByCampaignIdAndStatus(10, Stage.Status.ACTIVE)).thenReturn(List.of(activeStage()));
+        when(mw.getActiveStages()).thenReturn(List.of(activeStage()));
         when(mw.getGraphById(7)).thenReturn(baseGraph(100));
         when(redis.getTopResults(42, 1)).thenReturn(List.of(improvement(90))); // beats base (100)
         when(redis.isStageExhausted(42)).thenReturn(false);
@@ -104,9 +104,8 @@ class StageProgressionMonitorTest {
 
         RamseyConfig.Stage stageCfg = new RamseyConfig.Stage(); // default: immediate progression = true
         when(config.getStage()).thenReturn(stageCfg);
-        when(config.getCampaignId()).thenReturn(10);
 
-        when(mw.getStagesByCampaignIdAndStatus(10, Stage.Status.ACTIVE)).thenReturn(List.of(activeStage()));
+        when(mw.getActiveStages()).thenReturn(List.of(activeStage()));
         when(mw.getGraphById(7)).thenReturn(baseGraph(100));
         when(redis.getTopResults(42, 1)).thenReturn(List.of(improvement(90)));
         when(redis.isGraphAlreadyProcessed(anyString())).thenReturn(false);
@@ -121,6 +120,39 @@ class StageProgressionMonitorTest {
         new StageProgressionMonitor(mw, redis, config).checkForProgression();
 
         verify(mw).createStage(any()); // progressed
+    }
+
+    @Test
+    void progressesEveryCampaignsActiveStage() {
+        // Single campaign-agnostic QM: two active stages (different campaigns),
+        // both with an improvement, are BOTH progressed in one tick.
+        MiddlewareClient mw = mock(MiddlewareClient.class);
+        RedisQueueService redis = mock(RedisQueueService.class);
+        RamseyConfig config = mock(RamseyConfig.class);
+
+        RamseyConfig.Stage stageCfg = new RamseyConfig.Stage(); // immediate progression on
+        when(config.getStage()).thenReturn(stageCfg);
+
+        Stage stageA = new Stage();
+        stageA.setStageId(42); stageA.setBaseGraphId(7); stageA.setStatus(Stage.Status.ACTIVE); stageA.setCampaignId(10);
+        Stage stageB = new Stage();
+        stageB.setStageId(52); stageB.setBaseGraphId(17); stageB.setStatus(Stage.Status.ACTIVE); stageB.setCampaignId(11);
+        when(mw.getActiveStages()).thenReturn(List.of(stageA, stageB));
+
+        when(mw.getGraphById(7)).thenReturn(baseGraph(100));
+        Graph gB = new Graph(); gB.setGraphId(17); gB.setCliqueCount(200); gB.setVertexCount(282); gB.setSubgraphSize(8);
+        when(mw.getGraphById(17)).thenReturn(gB);
+        when(redis.getTopResults(42, 1)).thenReturn(List.of(improvement(90)));
+        when(redis.getTopResults(52, 1)).thenReturn(List.of(improvement(180)));
+        when(redis.isGraphAlreadyProcessed(anyString())).thenReturn(false);
+        Graph saved = new Graph(); saved.setGraphId(99);
+        when(mw.createGraph(any())).thenReturn(saved);
+        Stage createdStage = new Stage(); createdStage.setStageId(200); // null strategy -> skip re-init
+        when(mw.createStage(any())).thenReturn(createdStage);
+
+        new StageProgressionMonitor(mw, redis, config).checkForProgression();
+
+        verify(mw, times(2)).createStage(any()); // both campaigns progressed
     }
 
     private static Stage activeStage() {

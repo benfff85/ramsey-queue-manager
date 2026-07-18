@@ -52,6 +52,20 @@ public class MiddlewareClient {
 
     }
 
+    /**
+     * All ACTIVE stages across every campaign (campaignId omitted). The single
+     * campaign-agnostic QM iterates these — see the fleet abstraction plan.
+     */
+    public List<Stage> getActiveStages() {
+        String getStageUri = UriComponentsBuilder.fromUriString(stageUrl)
+                .queryParam("status", Stage.Status.ACTIVE)
+                .toUriString();
+
+        return Optional.ofNullable(restTemplate.getForObject(getStageUri, Stage[].class))
+                .map(Arrays::asList)
+                .orElse(Collections.emptyList());
+    }
+
     public List<Stage> getRecentStagesByCampaignIdAndStatus(Integer campaignId, Stage.Status status, int count) {
 
         String getStageUri = UriComponentsBuilder.fromUriString(stageUrl)
