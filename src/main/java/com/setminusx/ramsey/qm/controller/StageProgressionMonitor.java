@@ -48,16 +48,15 @@ public class StageProgressionMonitor {
     public void checkForProgression() {
         log.debug("Checking for stage progression");
 
-        // Get active stage for the campaign
-        List<Stage> stages = middlewareClient.getStagesByCampaignIdAndStatus(
-                ramseyConfig.getCampaignId(), Stage.Status.ACTIVE);
-
-        if (stages.size() != 1) {
-            log.debug("Expected 1 active stage, found {}", stages.size());
-            return;
+        // Single campaign-agnostic QM: progress EVERY campaign's active stage.
+        // Per-stage state (Redis keys, exhaustion tracking) is stage-scoped, so
+        // this is just a loop over the existing per-stage logic.
+        for (Stage currentStage : middlewareClient.getActiveStages()) {
+            checkStageForProgression(currentStage);
         }
+    }
 
-        Stage currentStage = stages.getFirst();
+    private void checkStageForProgression(Stage currentStage) {
         Integer stageId = currentStage.getStageId();
 
         // Get current base graph
@@ -301,27 +300,27 @@ public class StageProgressionMonitor {
      */
     @Scheduled(fixedRateString = "${ramsey.work-unit.queue.frequency-in-millis:5000}")
     public void ensureActiveStageInitialized() {
-        List<Stage> stages = middlewareClient.getStagesByCampaignIdAndStatus(ramseyConfig.getCampaignId(),
-                Stage.Status.ACTIVE);
+        // Single QM: ensure the Redis stage_config exists for EVERY campaign's
+        // active stage (safeguards against Redis data loss for any of them).
+        List<Stage> stages = middlewareClient.getActiveStages();
 
         if (stages.isEmpty()) {
             return;
         }
 
-        if (stages.size() > 1) {
-            log.warn("Expected 1 active stage, found {}. Using the first one.", stages.size());
+        for (Stage stage : stages) {
+            if (stage.getWorkEnumerationStrategy() != null) {
+                checkAndInitializeStage(stage);
+            }
         }
 
-        Stage stage = stages.getFirst();
-
-        if (stage.getWorkEnumerationStrategy() != null) {
-            checkAndInitializeStage(stage);
-        }
-
-        // Re-seed processed graph hashes independently — handles the case where only
-        // that key was lost while stage_config remained intact
+        // Re-seed processed graph hashes (global add-only set) if it was lost —
+        // reseed from the history of every live campaign.
         if (redisQueueService.isProcessedGraphHashesEmpty()) {
-            reseedProcessedGraphHashes(stage.getCampaignId());
+            stages.stream()
+                    .map(Stage::getCampaignId)
+                    .distinct()
+                    .forEach(this::reseedProcessedGraphHashes);
         }
     }
 
