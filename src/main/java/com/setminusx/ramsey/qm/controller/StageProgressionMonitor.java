@@ -5,8 +5,10 @@ import com.setminusx.ramsey.qm.config.RamseyConfig;
 import com.setminusx.ramsey.qm.model.BestResult;
 import com.setminusx.ramsey.qm.model.Edge;
 import com.setminusx.ramsey.qm.model.Graph;
+import com.setminusx.ramsey.qm.model.ProgressionPoint;
 import com.setminusx.ramsey.qm.model.Stage;
 import com.setminusx.ramsey.qm.service.RedisQueueService;
+import com.setminusx.ramsey.qm.utility.CliqueCounter;
 import com.setminusx.ramsey.qm.utility.GraphHashUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -222,17 +224,26 @@ public class StageProgressionMonitor {
         Graph savedGraph = middlewareClient.createGraph(derivedGraph);
         log.info("Created new graph with ID: {}", savedGraph.getGraphId());
 
-        // 5. Mark current stage as INACTIVE
+        switchToNewStage(currentStage, savedGraph, "source: " + source);
+    }
+
+    /**
+     * Deactivate the current stage and activate a new one based on savedGraph
+     * (shared by normal progression and perturbation kicks): create stage, init
+     * Redis counters, clear the old stage's keys.
+     */
+    private Stage switchToNewStage(Stage currentStage, Graph savedGraph, String details) {
+        // Mark current stage as INACTIVE
         log.info("Marking stage {} as INACTIVE", currentStage.getStageId());
         currentStage.setStatus(Stage.Status.INACTIVE);
         middlewareClient.updateStage(currentStage);
 
-        // 6. Create new active stage with default enumeration strategy
+        // Create new active stage with default enumeration strategy
         Stage newStage = new Stage();
         newStage.setStatus(Stage.Status.ACTIVE);
         newStage.setBaseGraphId(savedGraph.getGraphId());
         newStage.setCampaignId(currentStage.getCampaignId());
-        newStage.setDetails("source: " + source);
+        newStage.setDetails(details);
 
         // Apply default work enumeration strategy if configured
         String defaultStrategy = ramseyConfig.getStage().getDefaultWorkEnumerationStrategy();
@@ -242,15 +253,15 @@ public class StageProgressionMonitor {
         }
 
         Stage createdStage = middlewareClient.createStage(newStage);
-        log.info("Created new stage {} with base graph {} (source: {})",
-                createdStage.getStageId(), savedGraph.getGraphId(), source);
+        log.info("Created new stage {} with base graph {} ({})",
+                createdStage.getStageId(), savedGraph.getGraphId(), details);
 
-        // 7. Initialize counter-based mode for new stage (before clearing old stage)
+        // Initialize counter-based mode for new stage (before clearing old stage)
         if (createdStage.getWorkEnumerationStrategy() != null) {
             initializeRedisForStage(createdStage, savedGraph);
         }
 
-        // 8. Clear Redis queue and counter keys for old stage
+        // Clear Redis queue and counter keys for old stage
         log.info("Clearing Redis keys for old stage {}", currentStage.getStageId());
         redisQueueService.clearQueue(currentStage.getStageId());
         redisQueueService.clearStageCounter(currentStage.getStageId());
@@ -258,6 +269,167 @@ public class StageProgressionMonitor {
         redisQueueService.deleteTopResults(currentStage.getStageId());
 
         log.info("Stage progression complete! New stage {} is now active", createdStage.getStageId());
+        return createdStage;
+    }
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // Perturbation (Iterated Local Search "kick") //
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // Per-campaign: the stage id of the last kick, and how many consecutive kicks
+    // have happened without a new campaign minimum (drives escalation). In-memory:
+    // after a QM restart the worst case is one early re-kick of a walled campaign,
+    // which is harmless (kicks always start from the campaign-minimum incumbent).
+    private final Map<Integer, Integer> lastKickStageId = new ConcurrentHashMap<>();
+    private final Map<Integer, Integer> fruitlessKicks = new ConcurrentHashMap<>();
+    private final java.util.Random perturbationRandom = new java.util.Random();
+
+    /**
+     * ILS kick: when a campaign has gone {@code wallStages} stages with no new
+     * minimum, restart its descent from a randomly perturbed (balance-preserving)
+     * copy of the campaign's BEST graph — the incumbent, never the drifted current
+     * base. Consecutive fruitless kicks escalate the kick strength.
+     */
+    @Scheduled(fixedRateString = "${ramsey.perturbation.frequency-in-millis:300000}")
+    public void checkForPerturbation() {
+        if (!ramseyConfig.getPerturbation().isEnabled()) {
+            return;
+        }
+        for (Stage stage : middlewareClient.getActiveStages()) {
+            try {
+                maybePerturbCampaign(stage);
+            } catch (Exception e) {
+                log.warn("Perturbation check failed for campaign {}: {}", stage.getCampaignId(), e.toString());
+            }
+        }
+    }
+
+    private void maybePerturbCampaign(Stage currentStage) {
+        RamseyConfig.Perturbation cfg = ramseyConfig.getPerturbation();
+        Integer campaignId = currentStage.getCampaignId();
+
+        List<ProgressionPoint> history = middlewareClient.getProgression(campaignId);
+        if (history.size() < cfg.getWallStages()) {
+            return; // too young to be walled
+        }
+
+        // Campaign minimum (the incumbent) and the first stage that achieved it.
+        ProgressionPoint minPoint = history.stream()
+                .filter(p -> p.getCliqueCount() != null)
+                .min(java.util.Comparator.comparingLong(ProgressionPoint::getCliqueCount)
+                        .thenComparing(ProgressionPoint::getStageId))
+                .orElse(null);
+        if (minPoint == null) {
+            return;
+        }
+
+        long stagesSinceMin = history.stream()
+                .filter(p -> p.getStageId() > minPoint.getStageId())
+                .count();
+        if (stagesSinceMin < cfg.getWallStages()) {
+            resetKickTrackingIfImproved(campaignId, minPoint.getStageId());
+            return; // not walled
+        }
+
+        // Don't re-kick until another full wall has elapsed since the last kick.
+        Integer lastKick = lastKickStageId.get(campaignId);
+        if (lastKick != null) {
+            long stagesSinceKick = history.stream().filter(p -> p.getStageId() > lastKick).count();
+            if (stagesSinceKick < cfg.getWallStages()) {
+                return;
+            }
+            // The previous kick produced no new min (min stage predates the kick) -> escalate.
+            if (minPoint.getStageId() < lastKick) {
+                fruitlessKicks.merge(campaignId, 1, Integer::sum);
+            } else {
+                fruitlessKicks.remove(campaignId);
+            }
+        }
+
+        int multiplier = Math.min(fruitlessKicks.getOrDefault(campaignId, 0) + 1, cfg.getEscalationCap());
+        int pairs = cfg.getEdgePairs() * multiplier;
+
+        Graph incumbent = middlewareClient.getGraphById(minPoint.getBaseGraphId());
+        if (incumbent == null || incumbent.getEdgeData() == null) {
+            log.warn("Perturbation: could not fetch incumbent graph {} for campaign {}",
+                    minPoint.getBaseGraphId(), campaignId);
+            return;
+        }
+
+        log.info("PERTURBATION: campaign {} walled ({} stages past min {} @ stage {}); kicking incumbent "
+                        + "graph {} with {} edge pairs (escalation x{})",
+                campaignId, stagesSinceMin, minPoint.getCliqueCount(), minPoint.getStageId(),
+                incumbent.getGraphId(), pairs, multiplier);
+
+        perturbAndAdvance(currentStage, incumbent, pairs, multiplier);
+    }
+
+    private void resetKickTrackingIfImproved(Integer campaignId, Integer minStageId) {
+        Integer lastKick = lastKickStageId.get(campaignId);
+        if (lastKick != null && minStageId > lastKick) {
+            fruitlessKicks.remove(campaignId); // the kick paid off
+        }
+    }
+
+    private void perturbAndAdvance(Stage currentStage, Graph incumbent, int pairs, int multiplier) {
+        RamseyConfig.Perturbation cfg = ramseyConfig.getPerturbation();
+
+        for (int attempt = 1; attempt <= cfg.getMaxNoveltyRetries(); attempt++) {
+            String kicked = perturbBalanced(incumbent.getEdgeData(), pairs, perturbationRandom);
+            String hash = GraphHashUtil.computeHash(kicked);
+            if (redisQueueService.isGraphAlreadyProcessed(hash)) {
+                log.info("Perturbation attempt {}: kicked graph already visited, retrying", attempt);
+                continue;
+            }
+
+            long cliqueCount = CliqueCounter.countMonoCliques(
+                    kicked, incumbent.getVertexCount(), incumbent.getSubgraphSize());
+
+            Graph kickedGraph = new Graph();
+            kickedGraph.setEdgeData(kicked);
+            kickedGraph.setVertexCount(incumbent.getVertexCount());
+            kickedGraph.setSubgraphSize(incumbent.getSubgraphSize());
+            kickedGraph.setCliqueCount((int) cliqueCount);
+
+            redisQueueService.addProcessedGraphHash(hash);
+            Graph savedGraph = middlewareClient.createGraph(kickedGraph);
+            log.info("PERTURBATION: kicked graph saved as {} (cliques {} vs incumbent {})",
+                    savedGraph.getGraphId(), cliqueCount, incumbent.getCliqueCount());
+
+            Stage created = switchToNewStage(currentStage, savedGraph,
+                    "PERTURBATION kick from graph " + incumbent.getGraphId()
+                            + " (" + incumbent.getCliqueCount() + "), pairs=" + pairs
+                            + ", escalation=x" + multiplier);
+            lastKickStageId.put(currentStage.getCampaignId(), created.getStageId());
+            return;
+        }
+        log.warn("Perturbation: no novel kicked graph found for campaign {} after {} attempts",
+                currentStage.getCampaignId(), cfg.getMaxNoveltyRetries());
+    }
+
+    /**
+     * Balance-preserving random kick: flip {@code pairs} red edges to blue and the
+     * same number of blue edges to red (the production engine's move-class invariant).
+     */
+    static String perturbBalanced(String bits, int pairs, java.util.Random random) {
+        char[] chars = bits.toCharArray();
+        List<Integer> redIdx = new java.util.ArrayList<>();
+        List<Integer> blueIdx = new java.util.ArrayList<>();
+        for (int i = 0; i < chars.length; i++) {
+            if (chars[i] == '1') {
+                redIdx.add(i);
+            } else {
+                blueIdx.add(i);
+            }
+        }
+        int p = Math.min(pairs, Math.min(redIdx.size(), blueIdx.size()));
+        java.util.Collections.shuffle(redIdx, random);
+        java.util.Collections.shuffle(blueIdx, random);
+        for (int i = 0; i < p; i++) {
+            chars[redIdx.get(i)] = '0';
+            chars[blueIdx.get(i)] = '1';
+        }
+        return new String(chars);
     }
 
     /**

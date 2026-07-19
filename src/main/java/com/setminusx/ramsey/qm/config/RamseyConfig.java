@@ -21,6 +21,27 @@ public class RamseyConfig {
     private WorkUnit workUnit;
     private Campaign campaign;
     private Stage stage;
+    private Perturbation perturbation = new Perturbation();
+
+    /**
+     * Iterated-local-search "kick": when a campaign has gone {@code wallStages}
+     * stages with no new minimum, restart its descent from a randomly perturbed
+     * copy of the campaign's best (minimum) graph. See the fleet-abstraction /
+     * perturbation plan docs in ramsey-mw.
+     */
+    @Data
+    public static class Perturbation {
+        /** Off by default — enabling changes live search behavior. Env: PERTURBATION_ENABLED */
+        private boolean enabled = false;
+        /** Wall = this many stages with no new campaign minimum. Env: PERTURBATION_WALL_STAGES */
+        private int wallStages = 500;
+        /** Kick strength: flips this many red AND this many blue edges (balance-preserving). Env: PERTURBATION_EDGE_PAIRS */
+        private int edgePairs = 30;
+        /** Strength multiplier cap for consecutive fruitless kicks (1x..capx). Env: PERTURBATION_ESCALATION_CAP */
+        private int escalationCap = 4;
+        /** Attempts to find a novel (unvisited) perturbed graph before giving up this tick. */
+        private int maxNoveltyRetries = 5;
+    }
 
     @Data
     public static class Mw {
