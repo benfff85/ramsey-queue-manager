@@ -82,7 +82,7 @@ class PerturbationTest {
     private ProgressionPoint point(int stageId, long clique) {
         ProgressionPoint p = new ProgressionPoint();
         p.setStageId(stageId);
-        p.setBaseGraphId(stageId);
+        p.setGraphId(stageId);
         p.setCliqueCount(clique);
         return p;
     }

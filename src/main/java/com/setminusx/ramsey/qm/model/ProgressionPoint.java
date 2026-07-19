@@ -6,7 +6,7 @@ import lombok.Data;
 @Data
 public class ProgressionPoint {
     private Integer stageId;
-    private Integer baseGraphId;
+    private Integer graphId; // the stage's base graph id (mw ProgressionDTO serializes this as "graphId")
     private Long cliqueCount;
     private String createdDate;
     private String status;

@@ -349,10 +349,10 @@ public class StageProgressionMonitor {
         int multiplier = Math.min(fruitlessKicks.getOrDefault(campaignId, 0) + 1, cfg.getEscalationCap());
         int pairs = cfg.getEdgePairs() * multiplier;
 
-        Graph incumbent = middlewareClient.getGraphById(minPoint.getBaseGraphId());
+        Graph incumbent = middlewareClient.getGraphById(minPoint.getGraphId());
         if (incumbent == null || incumbent.getEdgeData() == null) {
             log.warn("Perturbation: could not fetch incumbent graph {} for campaign {}",
-                    minPoint.getBaseGraphId(), campaignId);
+                    minPoint.getGraphId(), campaignId);
             return;
         }
 
