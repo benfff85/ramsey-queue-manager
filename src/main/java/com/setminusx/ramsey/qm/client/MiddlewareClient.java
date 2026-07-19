@@ -36,6 +36,15 @@ public class MiddlewareClient {
         return restTemplate.getForObject(campaignUrl + "/" + campaignId, Campaign.class);
     }
 
+    /** Full stage history of a campaign (used by perturbation wall detection). */
+    public List<ProgressionPoint> getProgression(Integer campaignId) {
+        return Optional.ofNullable(
+                        restTemplate.getForObject(campaignUrl + "/" + campaignId + "/progression",
+                                ProgressionPoint[].class))
+                .map(Arrays::asList)
+                .orElse(Collections.emptyList());
+    }
+
     ////////////////////////////////////////////////////////////////////////////////
     // Stage //
     ////////////////////////////////////////////////////////////////////////////////
