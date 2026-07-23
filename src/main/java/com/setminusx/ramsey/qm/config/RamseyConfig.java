@@ -35,10 +35,11 @@ public class RamseyConfig {
         private boolean enabled = false;
         /** Wall = this many stages with no new campaign minimum. Env: PERTURBATION_WALL_STAGES */
         private int wallStages = 500;
-        /** Kick strength: flips this many red AND this many blue edges (balance-preserving). Env: PERTURBATION_EDGE_PAIRS */
-        private int edgePairs = 30;
-        /** Strength multiplier cap for consecutive fruitless kicks (1x..capx). Env: PERTURBATION_ESCALATION_CAP */
-        private int escalationCap = 4;
+        /** Base kick strength: flips this many red AND this many blue edges (balance-preserving). Env: PERTURBATION_EDGE_PAIRS */
+        private int edgePairs = 60;
+        /** Max strength multiplier. Consecutive fruitless kicks escalate GEOMETRICALLY (x1,x2,x4,x8,...)
+         *  capped here, so pairs run edgePairs * {1,2,4,...} up to edgePairs*cap. Env: PERTURBATION_ESCALATION_CAP */
+        private int escalationCap = 32;
         /** Attempts to find a novel (unvisited) perturbed graph before giving up this tick. */
         private int maxNoveltyRetries = 5;
     }

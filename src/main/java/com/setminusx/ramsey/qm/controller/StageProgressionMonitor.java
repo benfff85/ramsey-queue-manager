@@ -346,7 +346,11 @@ public class StageProgressionMonitor {
             }
         }
 
-        int multiplier = Math.min(fruitlessKicks.getOrDefault(campaignId, 0) + 1, cfg.getEscalationCap());
+        // Geometric escalation: each consecutive fruitless kick doubles the strength
+        // (x1, x2, x4, x8, ...) up to the cap. streak is capped before the shift to avoid
+        // int overflow; the min with the cap bounds it regardless.
+        int streak = fruitlessKicks.getOrDefault(campaignId, 0);
+        int multiplier = Math.min(1 << Math.min(streak, 30), cfg.getEscalationCap());
         int pairs = cfg.getEdgePairs() * multiplier;
 
         Graph incumbent = middlewareClient.getGraphById(minPoint.getGraphId());
