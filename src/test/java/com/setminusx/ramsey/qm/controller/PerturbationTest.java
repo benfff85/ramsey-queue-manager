@@ -225,6 +225,38 @@ class PerturbationTest {
         verify(mw).createGraph(any()); // wall elapsed since recovered kick -> kicks
     }
 
+    /**
+     * Regression: the progression and perturbation loops iterate a snapshot of getActiveStages()
+     * and run on separate scheduler threads. If the stage was already advanced by the other loop,
+     * kicking it again would create a SECOND active stage (two competing lineages, as seen live on
+     * campaign 10). The kick must be skipped when the stage is no longer ACTIVE.
+     */
+    @Test
+    void staleStage_alreadyAdvanced_doesNotCreateSecondActiveStage() {
+        MiddlewareClient mw = mock(MiddlewareClient.class);
+        RedisQueueService redis = mock(RedisQueueService.class);
+        Stage stale = activeStage(1000, 3);
+        // The loop's snapshot still contains stage 1000, but upstream it is gone (advanced to 1001).
+        when(mw.getActiveStages())
+                .thenReturn(List.of(stale))          // snapshot the loop iterates
+                .thenReturn(List.of(activeStage(1001, 3))); // re-read inside switchToNewStage
+        when(mw.getProgression(3)).thenReturn(walledHistory(400, 1000, 600));
+        Graph incumbent = new Graph();
+        incumbent.setGraphId(400);
+        incumbent.setEdgeData("1".repeat(10));
+        incumbent.setVertexCount(5);
+        incumbent.setSubgraphSize(5);
+        when(mw.getGraphById(400)).thenReturn(incumbent);
+        when(redis.isGraphAlreadyProcessed(anyString())).thenReturn(false);
+        Graph saved = new Graph();
+        saved.setGraphId(9000);
+        when(mw.createGraph(any())).thenReturn(saved);
+
+        new StageProgressionMonitor(mw, redis, config(true, 500)).checkForPerturbation();
+
+        verify(mw, never()).createStage(any()); // no second ACTIVE stage
+    }
+
     private static int count(String s, char c) {
         return (int) s.chars().filter(x -> x == c).count();
     }

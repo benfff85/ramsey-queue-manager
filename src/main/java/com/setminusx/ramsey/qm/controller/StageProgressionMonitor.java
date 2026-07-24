@@ -54,9 +54,25 @@ public class StageProgressionMonitor {
         // Per-stage state (Redis keys, exhaustion tracking) is stage-scoped, so
         // this is just a loop over the existing per-stage logic.
         for (Stage currentStage : middlewareClient.getActiveStages()) {
-            checkStageForProgression(currentStage);
+            synchronized (lockFor(currentStage.getCampaignId())) {
+                checkStageForProgression(currentStage);
+            }
         }
     }
+
+    /**
+     * Per-campaign lock serializing everything that ADVANCES a stage. The progression
+     * (30s) and perturbation (60s) loops run on separate scheduler threads (pool size 100),
+     * so without this they can both advance the same stage in the same instant and leave the
+     * campaign with TWO ACTIVE stages — two competing lineages that then progress forever in
+     * lockstep (observed on campaign 10: a kick and a normal advance 10ms apart). Locking per
+     * campaign (not globally) keeps unrelated campaigns progressing in parallel.
+     */
+    private Object lockFor(Integer campaignId) {
+        return campaignLocks.computeIfAbsent(campaignId, k -> new Object());
+    }
+
+    private final Map<Integer, Object> campaignLocks = new ConcurrentHashMap<>();
 
     private void checkStageForProgression(Stage currentStage) {
         Integer stageId = currentStage.getStageId();
@@ -232,7 +248,20 @@ public class StageProgressionMonitor {
      * (shared by normal progression and perturbation kicks): create stage, init
      * Redis counters, clear the old stage's keys.
      */
+    /**
+     * Advance a campaign: deactivate {@code currentStage} and create a new ACTIVE stage on
+     * {@code savedGraph}. Returns null (advancing nothing) if the stage is no longer ACTIVE —
+     * both scheduled loops iterate a snapshot of getActiveStages() taken before they acquire
+     * the campaign lock, so a stage can already have been advanced by the other loop by the
+     * time we get here. Advancing it again would create a SECOND active stage.
+     */
     private Stage switchToNewStage(Stage currentStage, Graph savedGraph, String details) {
+        if (!isStillActive(currentStage)) {
+            log.info("Stage {} is no longer ACTIVE (already advanced); skipping advance ({})",
+                    currentStage.getStageId(), details);
+            return null;
+        }
+
         // Mark current stage as INACTIVE
         log.info("Marking stage {} as INACTIVE", currentStage.getStageId());
         currentStage.setStatus(Stage.Status.INACTIVE);
@@ -300,7 +329,9 @@ public class StageProgressionMonitor {
         }
         for (Stage stage : middlewareClient.getActiveStages()) {
             try {
-                maybePerturbCampaign(stage);
+                synchronized (lockFor(stage.getCampaignId())) {
+                    maybePerturbCampaign(stage);
+                }
             } catch (Exception e) {
                 log.warn("Perturbation check failed for campaign {}: {}", stage.getCampaignId(), e.toString());
             }
@@ -374,6 +405,21 @@ public class StageProgressionMonitor {
         perturbAndAdvance(currentStage, incumbent, pairs, multiplier);
     }
 
+    /**
+     * True if the stage is still ACTIVE upstream. Fails OPEN on a middleware error: a transient
+     * fetch failure shouldn't stall legitimate progression, and the campaign lock already covers
+     * the common race.
+     */
+    private boolean isStillActive(Stage stage) {
+        try {
+            return middlewareClient.getActiveStages().stream()
+                    .anyMatch(s -> stage.getStageId().equals(s.getStageId()));
+        } catch (Exception e) {
+            log.warn("Could not verify stage {} still ACTIVE ({}); proceeding", stage.getStageId(), e.toString());
+            return true;
+        }
+    }
+
     private void resetKickTrackingIfImproved(Integer campaignId, Integer minStageId) {
         Integer lastKick = lastKickStageId.get(campaignId);
         if (lastKick != null && minStageId > lastKick) {
@@ -444,6 +490,13 @@ public class StageProgressionMonitor {
                     "PERTURBATION kick from graph " + incumbent.getGraphId()
                             + " (" + incumbent.getCliqueCount() + "), pairs=" + pairs
                             + ", escalation=x" + multiplier);
+            if (created == null) {
+                // The stage was advanced by the progression loop first; skip this kick and
+                // retry on a later tick (the campaign is still walled, so nothing is lost).
+                log.info("Perturbation: campaign {} stage advanced concurrently; skipping kick",
+                        currentStage.getCampaignId());
+                return;
+            }
             lastKickStageId.put(currentStage.getCampaignId(), created.getStageId());
             return;
         }
