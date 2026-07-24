@@ -277,12 +277,15 @@ public class StageProgressionMonitor {
     ////////////////////////////////////////////////////////////////////////////////
 
     // Per-campaign: the stage id of the last kick, and how many consecutive kicks
-    // have happened without a new campaign minimum (drives escalation). In-memory:
-    // after a QM restart the worst case is one early re-kick of a walled campaign,
-    // which is harmless (kicks always start from the campaign-minimum incumbent).
+    // have happened without a new campaign minimum (drives escalation). These live in
+    // memory but are REHYDRATED from persisted history on first use after a restart
+    // (hydrateKickStateFromHistory), so a QM restart resumes the wall/escalation instead
+    // of firing an early kick and resetting the escalation ladder.
     private final Map<Integer, Integer> lastKickStageId = new ConcurrentHashMap<>();
     private final Map<Integer, Integer> fruitlessKicks = new ConcurrentHashMap<>();
     private final java.util.Random perturbationRandom = new java.util.Random();
+    // Kick stages are recognized by this details prefix (set when a kick creates its stage).
+    static final String KICK_DETAILS_PREFIX = "PERTURBATION";
 
     /**
      * ILS kick: when a campaign has gone {@code wallStages} stages with no new
@@ -331,6 +334,9 @@ public class StageProgressionMonitor {
             return; // not walled
         }
 
+        // Recover kick state after a restart before the gate, so we don't re-kick early.
+        hydrateKickStateFromHistory(campaignId, history, minPoint);
+
         // Don't re-kick until another full wall has elapsed since the last kick.
         Integer lastKick = lastKickStageId.get(campaignId);
         if (lastKick != null) {
@@ -373,6 +379,40 @@ public class StageProgressionMonitor {
         if (lastKick != null && minStageId > lastKick) {
             fruitlessKicks.remove(campaignId); // the kick paid off
         }
+    }
+
+    /**
+     * Restore in-memory kick state from the persisted progression after a QM restart, so a
+     * restart doesn't skip the re-kick gate (firing an early kick) or reset the escalation
+     * ladder. No-op once the campaign has in-memory state, or if it has never been kicked.
+     * Kick stages are identified authoritatively by their {@code PERTURBATION} details
+     * marker (a clique-count heuristic is unreliable: big kicks' descents drift wildly and
+     * cross any threshold many times). Escalation streak = kicks after the current min,
+     * minus the last one (whose own fruitfulness is only decided at the next kick), matching
+     * the live counter.
+     */
+    void hydrateKickStateFromHistory(Integer campaignId, List<ProgressionPoint> history, ProgressionPoint minPoint) {
+        if (lastKickStageId.containsKey(campaignId)) {
+            return; // in-memory state is authoritative once present
+        }
+        List<Integer> kickStages = history.stream()
+                .filter(p -> p.getDetails() != null && p.getDetails().startsWith(KICK_DETAILS_PREFIX))
+                .map(ProgressionPoint::getStageId)
+                .sorted()
+                .toList();
+        if (kickStages.isEmpty()) {
+            return; // never kicked -> leave state empty (first-kick behavior)
+        }
+        int lastKick = kickStages.get(kickStages.size() - 1);
+        lastKickStageId.put(campaignId, lastKick);
+        long kicksAfterMin = kickStages.stream().filter(s -> s > minPoint.getStageId()).count();
+        int streak = (int) Math.max(0, kicksAfterMin - 1);
+        if (streak > 0) {
+            fruitlessKicks.put(campaignId, streak);
+        }
+        log.info("PERTURBATION: rehydrated kick state for campaign {} from history "
+                + "({} kicks, lastKick stage {}, fruitless streak {})",
+                campaignId, kickStages.size(), lastKick, streak);
     }
 
     private void perturbAndAdvance(Stage currentStage, Graph incumbent, int pairs, int multiplier) {

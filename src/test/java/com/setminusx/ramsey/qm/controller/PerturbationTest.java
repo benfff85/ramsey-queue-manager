@@ -164,6 +164,67 @@ class PerturbationTest {
         verify(mw, never()).createStage(any());
     }
 
+    /** A progression point tagged as a perturbation kick (how kicks are recovered on restart). */
+    private ProgressionPoint kickPoint(int stageId, long clique) {
+        ProgressionPoint p = point(stageId, clique);
+        p.setDetails("PERTURBATION kick from graph 100 (1000), pairs=60, escalation=x1");
+        return p;
+    }
+
+    @Test
+    void restart_recentKick_hydratesFromHistory_doesNotReKickEarly() {
+        MiddlewareClient mw = mock(MiddlewareClient.class);
+        RedisQueueService redis = mock(RedisQueueService.class);
+        when(mw.getActiveStages()).thenReturn(List.of(activeStage(700, 3)));
+
+        // Fresh QM (no in-memory kick state). History: min 1000 @ stage 100, then walled,
+        // with a KICK (details-tagged) at stage 650 — only 50 stages ago, i.e. < wallStages
+        // 500. The old code (lastKick == null) would skip the gate and re-kick; hydration
+        // must recover lastKick=650 and hold.
+        List<ProgressionPoint> h = new ArrayList<>();
+        for (int i = 1; i < 100; i++) h.add(point(i, 1100 + i));
+        h.add(point(100, 1000)); // min
+        for (int i = 101; i <= 700; i++) h.add(i == 650 ? kickPoint(i, 1050) : point(i, 1050));
+        when(mw.getProgression(3)).thenReturn(h);
+
+        new StageProgressionMonitor(mw, redis, config(true, 500)).checkForPerturbation();
+
+        verify(mw, never()).createGraph(any()); // no early re-kick
+    }
+
+    @Test
+    void restart_oldKick_hydratesFromHistory_stillKicksWhenWallElapsed() {
+        MiddlewareClient mw = mock(MiddlewareClient.class);
+        RedisQueueService redis = mock(RedisQueueService.class);
+        Stage current = activeStage(700, 3);
+        when(mw.getActiveStages()).thenReturn(List.of(current));
+
+        // Same shape but the kick is at stage 120 — 580 stages ago (>= 500), so the wall
+        // since the recovered kick HAS elapsed and a (legitimate) kick should fire.
+        List<ProgressionPoint> h = new ArrayList<>();
+        for (int i = 1; i < 100; i++) h.add(point(i, 1100 + i));
+        h.add(point(100, 1000)); // min
+        for (int i = 101; i <= 700; i++) h.add(i == 120 ? kickPoint(i, 1050) : point(i, 1050));
+        when(mw.getProgression(3)).thenReturn(h);
+        Graph incumbent = new Graph();
+        incumbent.setGraphId(100);
+        incumbent.setEdgeData("1".repeat(10));
+        incumbent.setVertexCount(5);
+        incumbent.setSubgraphSize(5);
+        when(mw.getGraphById(100)).thenReturn(incumbent);
+        when(redis.isGraphAlreadyProcessed(anyString())).thenReturn(false);
+        Graph saved = new Graph();
+        saved.setGraphId(9000);
+        when(mw.createGraph(any())).thenReturn(saved);
+        Stage created = new Stage();
+        created.setStageId(701);
+        when(mw.createStage(any())).thenReturn(created);
+
+        new StageProgressionMonitor(mw, redis, config(true, 500)).checkForPerturbation();
+
+        verify(mw).createGraph(any()); // wall elapsed since recovered kick -> kicks
+    }
+
     private static int count(String s, char c) {
         return (int) s.chars().filter(x -> x == c).count();
     }
