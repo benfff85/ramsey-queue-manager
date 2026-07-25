@@ -61,6 +61,27 @@ public class StageProgressionMonitor {
     }
 
     /**
+     * Settle timer fired for a stage: adopt the best result available now. Triggered by
+     * {@link StageAdoptScheduler} a deliberate settle window after a worker announced the stage's
+     * first new best, which is both earlier and more precisely timed than the polling loop (whose
+     * settle time is random 0..pollInterval and whose interval also floors the stage duration).
+     *
+     * <p>Runs the SAME per-stage logic as the loop, under the same per-campaign lock, so this is
+     * purely a better-timed trigger rather than a second code path. No-ops if the stage is no
+     * longer active (the loop or another timer already advanced it).
+     */
+    public void adoptAfterSettle(int stageId) {
+        for (Stage stage : middlewareClient.getActiveStages()) {
+            if (stage.getStageId() != null && stage.getStageId() == stageId) {
+                synchronized (lockFor(stage.getCampaignId())) {
+                    checkStageForProgression(stage);
+                }
+                return;
+            }
+        }
+    }
+
+    /**
      * Per-campaign lock serializing everything that ADVANCES a stage. The progression
      * (30s) and perturbation (60s) loops run on separate scheduler threads (pool size 100),
      * so without this they can both advance the same stage in the same instant and leave the

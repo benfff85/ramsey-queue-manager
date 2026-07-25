@@ -88,6 +88,17 @@ public class RamseyConfig {
         private Integer topResultsCount = 10;
 
         /**
+         * Settle window: how long to keep searching after a worker announces the first new best
+         * for a stage, before adopting the best result available. Workers publish new bests on
+         * Redis pub/sub, so this decouples "when we learn" from "how long we wait" — with plain
+         * polling the settle time is random (0..poll interval) and the poll interval also floors
+         * the stage duration. Measured tradeoff: adopting sooner yields more stages but weaker
+         * steps (200ms poll = +28% stages, -31% cliques/stage, net worse than 1000ms).
+         * 0 disables the timer, leaving pure polling. Env: STAGE_ADOPT_SETTLE_MS
+         */
+        private long adoptSettleMs = 0;
+
+        /**
          * Delay in milliseconds after stage exhaustion before progressing.
          * Allows in-flight work to complete. Default: 60000 (60 seconds)
          */
