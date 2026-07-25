@@ -24,17 +24,24 @@ public class RamseyConfig {
     private Perturbation perturbation = new Perturbation();
 
     /**
-     * Iterated-local-search "kick": when a campaign has gone {@code wallStages}
-     * stages with no new minimum, restart its descent from a randomly perturbed
-     * copy of the campaign's best (minimum) graph. See the fleet-abstraction /
-     * perturbation plan docs in ramsey-mw.
+     * Iterated-local-search "kick": when the current basin has gone {@code basinStaleStages}
+     * stages without improving on its own floor, restart the descent from a randomly perturbed
+     * copy of the campaign's best (minimum) graph. See the fleet-abstraction / perturbation plan
+     * docs in ramsey-mw.
      */
     @Data
     public static class Perturbation {
         /** Off by default — enabling changes live search behavior. Env: PERTURBATION_ENABLED */
         private boolean enabled = false;
-        /** Wall = this many stages with no new campaign minimum. Env: PERTURBATION_WALL_STAGES */
-        private int wallStages = 500;
+        /**
+         * Kick when the current basin has gone this many stages without beating its own floor.
+         * The clock runs from the basin's BEST stage, not from the kick, so however long a
+         * descent takes it is never interrupted while it is still finding new minima — only
+         * once it flattens. Replaces the old fixed {@code PERTURBATION_WALL_STAGES} count of
+         * stages since the kick, which truncated descents that were still in free fall.
+         * Env: PERTURBATION_BASIN_STALE_STAGES
+         */
+        private int basinStaleStages = 100;
         /** Base kick strength: flips this many red AND this many blue edges (balance-preserving). Env: PERTURBATION_EDGE_PAIRS */
         private int edgePairs = 60;
         /** Max strength multiplier. Consecutive fruitless kicks escalate GEOMETRICALLY (x1,x2,x4,x8,...)

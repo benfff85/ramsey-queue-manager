@@ -364,38 +364,46 @@ public class StageProgressionMonitor {
         Integer campaignId = currentStage.getCampaignId();
 
         List<ProgressionPoint> history = middlewareClient.getProgression(campaignId);
-        if (history.size() < cfg.getWallStages()) {
-            return; // too young to be walled
+        if (history.size() < cfg.getBasinStaleStages()) {
+            return; // too young to have stalled
         }
 
-        // Campaign minimum (the incumbent) and the first stage that achieved it.
-        ProgressionPoint minPoint = history.stream()
-                .filter(p -> p.getCliqueCount() != null)
-                .min(java.util.Comparator.comparingLong(ProgressionPoint::getCliqueCount)
-                        .thenComparing(ProgressionPoint::getStageId))
-                .orElse(null);
+        // Campaign minimum (the incumbent) and the first stage that achieved it. This is what a
+        // kick restarts FROM, and what decides escalation — it is NOT the staleness clock.
+        ProgressionPoint minPoint = minPointFrom(history, Integer.MIN_VALUE);
         if (minPoint == null) {
             return;
         }
 
-        long stagesSinceMin = history.stream()
-                .filter(p -> p.getStageId() > minPoint.getStageId())
+        // Recover kick state after a restart before the gate, so the basin window below starts at
+        // the right stage and we don't re-kick early.
+        hydrateKickStateFromHistory(campaignId, history, minPoint);
+        Integer lastKick = lastKickStageId.get(campaignId);
+
+        // Staleness is measured inside the CURRENT BASIN — stages since this basin's own best
+        // stage — not as a fixed count since the kick. A descent that is still finding new minima
+        // therefore runs as long as it needs, and a basin that has flattened is kicked promptly.
+        // The fixed stages-since-kick wall did both badly: it cut three campaign-10 descents off
+        // while they were still in free fall (kicks 18/19/20 each bottomed out on their FINAL
+        // stage, floors 58k/158k/81k versus a 25,758 incumbent), while flat basins idled for
+        // thousands of stages after their floor had stopped moving.
+        //
+        // Before the first kick the basin IS the whole campaign, so this also subsumes the old
+        // "stages since the campaign min" wall.
+        int basinStart = lastKick == null ? Integer.MIN_VALUE : lastKick;
+        ProgressionPoint basinMin = minPointFrom(history, basinStart);
+        if (basinMin == null) {
+            return;
+        }
+        long stagesSinceBasinMin = history.stream()
+                .filter(p -> p.getStageId() > basinMin.getStageId())
                 .count();
-        if (stagesSinceMin < cfg.getWallStages()) {
+        if (stagesSinceBasinMin < cfg.getBasinStaleStages()) {
             resetKickTrackingIfImproved(campaignId, minPoint.getStageId());
-            return; // not walled
+            return; // basin is still improving
         }
 
-        // Recover kick state after a restart before the gate, so we don't re-kick early.
-        hydrateKickStateFromHistory(campaignId, history, minPoint);
-
-        // Don't re-kick until another full wall has elapsed since the last kick.
-        Integer lastKick = lastKickStageId.get(campaignId);
         if (lastKick != null) {
-            long stagesSinceKick = history.stream().filter(p -> p.getStageId() > lastKick).count();
-            if (stagesSinceKick < cfg.getWallStages()) {
-                return;
-            }
             // The previous kick produced no new min (min stage predates the kick) -> escalate.
             if (minPoint.getStageId() < lastKick) {
                 fruitlessKicks.merge(campaignId, 1, Integer::sum);
@@ -418,12 +426,28 @@ public class StageProgressionMonitor {
             return;
         }
 
-        log.info("PERTURBATION: campaign {} walled ({} stages past min {} @ stage {}); kicking incumbent "
-                        + "graph {} with {} edge pairs (escalation x{})",
-                campaignId, stagesSinceMin, minPoint.getCliqueCount(), minPoint.getStageId(),
+        log.info("PERTURBATION: campaign {} basin stale ({} stages past basin floor {} @ stage {}; "
+                        + "incumbent {} @ stage {}); kicking incumbent graph {} with {} edge pairs "
+                        + "(escalation x{})",
+                campaignId, stagesSinceBasinMin, basinMin.getCliqueCount(), basinMin.getStageId(),
+                minPoint.getCliqueCount(), minPoint.getStageId(),
                 incumbent.getGraphId(), pairs, multiplier);
 
         perturbAndAdvance(currentStage, incumbent, pairs, multiplier);
+    }
+
+    /**
+     * Lowest-count point at or after {@code fromStageId}, earliest stage breaking ties.
+     * With {@link Integer#MIN_VALUE} this is the campaign incumbent; with the last kick's stage
+     * it is the current basin's floor. The kick stage itself is always a spike (a perturbed graph
+     * counts far worse than the incumbent it came from), so including it never skews the min.
+     */
+    private static ProgressionPoint minPointFrom(List<ProgressionPoint> history, int fromStageId) {
+        return history.stream()
+                .filter(p -> p.getCliqueCount() != null && p.getStageId() >= fromStageId)
+                .min(java.util.Comparator.comparingLong(ProgressionPoint::getCliqueCount)
+                        .thenComparing(ProgressionPoint::getStageId))
+                .orElse(null);
     }
 
     /**

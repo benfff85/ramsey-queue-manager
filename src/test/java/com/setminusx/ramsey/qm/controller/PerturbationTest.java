@@ -45,11 +45,11 @@ class PerturbationTest {
 
     // ---------- wall detection / kick behavior ----------
 
-    private RamseyConfig config(boolean enabled, int wallStages) {
+    private RamseyConfig config(boolean enabled, int basinStaleStages) {
         RamseyConfig config = mock(RamseyConfig.class);
         RamseyConfig.Perturbation p = new RamseyConfig.Perturbation();
         p.setEnabled(enabled);
-        p.setWallStages(wallStages);
+        p.setBasinStaleStages(basinStaleStages);
         p.setEdgePairs(2);
         lenient().when(config.getPerturbation()).thenReturn(p);
         RamseyConfig.Stage stageCfg = new RamseyConfig.Stage();
@@ -223,6 +223,97 @@ class PerturbationTest {
         new StageProgressionMonitor(mw, redis, config(true, 500)).checkForPerturbation();
 
         verify(mw).createGraph(any()); // wall elapsed since recovered kick -> kicks
+    }
+
+    /**
+     * Campaign incumbent at stage 100, a details-tagged kick at {@code kickStage}, then one basin
+     * point per stage with counts from {@code basinCount} (indexed 1..basinLen). The kick point
+     * itself is a big spike, as a real perturbed graph always is.
+     */
+    private List<ProgressionPoint> kickedHistory(
+            long campaignMin, int kickStage, java.util.function.IntToLongFunction basinCount, int basinLen) {
+        List<ProgressionPoint> h = new ArrayList<>();
+        for (int i = 1; i < 100; i++) h.add(point(i, campaignMin + 1000 + i));
+        h.add(point(100, campaignMin)); // campaign incumbent
+        for (int i = 101; i < kickStage; i++) h.add(point(i, campaignMin + 50));
+        h.add(kickPoint(kickStage, 5_000_000));
+        for (int i = 1; i <= basinLen; i++) h.add(point(kickStage + i, basinCount.applyAsLong(i)));
+        return h;
+    }
+
+    private void stubKickTargets(MiddlewareClient mw, RedisQueueService redis, int incumbentGraphId) {
+        Graph incumbent = new Graph();
+        incumbent.setGraphId(incumbentGraphId);
+        incumbent.setEdgeData("1".repeat(10));
+        incumbent.setVertexCount(5);
+        incumbent.setSubgraphSize(5);
+        incumbent.setCliqueCount(1);
+        lenient().when(mw.getGraphById(incumbentGraphId)).thenReturn(incumbent);
+        lenient().when(redis.isGraphAlreadyProcessed(anyString())).thenReturn(false);
+        Graph saved = new Graph();
+        saved.setGraphId(9000);
+        lenient().when(mw.createGraph(any())).thenReturn(saved);
+        Stage created = new Stage();
+        created.setStageId(99999);
+        lenient().when(mw.createStage(any())).thenReturn(created);
+    }
+
+    /**
+     * The staleness clock runs from the BASIN FLOOR, not from the kick, so a descent that is
+     * still finding new minima is never interrupted — however long it runs. Under the old fixed
+     * stages-since-kick wall this basin (1,800 stages past its kick, still in free fall) would
+     * have been cut off; that is exactly how campaign 10's kicks 18/19/20 died, each bottoming
+     * out on its FINAL stage at 58k/158k/81k against a 25,758 incumbent.
+     */
+    @Test
+    void basinStillDescending_isNeverKicked_howeverLongTheDescentRuns() {
+        MiddlewareClient mw = mock(MiddlewareClient.class);
+        RedisQueueService redis = mock(RedisQueueService.class);
+        when(mw.getActiveStages()).thenReturn(List.of(activeStage(2000, 3)));
+        when(mw.getProgression(3)).thenReturn(kickedHistory(1000, 200, i -> 50_000 - i * 10L, 1800));
+        stubKickTargets(mw, redis, 100);
+
+        new StageProgressionMonitor(mw, redis, config(true, 500)).checkForPerturbation();
+
+        verify(mw, never()).createGraph(any());
+        verify(mw, never()).createStage(any());
+    }
+
+    /**
+     * Mirror image: once the floor stops moving the basin is kicked after exactly
+     * basinStaleStages, without sitting out the remainder of a long fixed wall.
+     */
+    @Test
+    void basinFlattened_kicksOnceTheFloorStopsMoving() {
+        MiddlewareClient mw = mock(MiddlewareClient.class);
+        RedisQueueService redis = mock(RedisQueueService.class);
+        when(mw.getActiveStages()).thenReturn(List.of(activeStage(2000, 3)));
+        // Descends for 50 stages to a floor of 49,500 at stage 250, then 500 flat stages.
+        when(mw.getProgression(3)).thenReturn(
+                kickedHistory(1000, 200, i -> i <= 50 ? 50_000 - i * 10L : 49_500L, 550));
+        stubKickTargets(mw, redis, 100);
+
+        new StageProgressionMonitor(mw, redis, config(true, 500)).checkForPerturbation();
+
+        verify(mw).getGraphById(100); // kicks the campaign incumbent, not the basin floor graph
+        verify(mw).createGraph(any());
+        verify(mw).createStage(any());
+    }
+
+    /** One improvement inside the stale window restarts the clock. */
+    @Test
+    void basinImprovingIntermittently_holdsTheKickOff() {
+        MiddlewareClient mw = mock(MiddlewareClient.class);
+        RedisQueueService redis = mock(RedisQueueService.class);
+        when(mw.getActiveStages()).thenReturn(List.of(activeStage(2000, 3)));
+        // Flat except for a single new floor 400 stages in — only 150 stages of staleness since.
+        when(mw.getProgression(3)).thenReturn(
+                kickedHistory(1000, 200, i -> i == 400 ? 49_000L : 49_500L, 550));
+        stubKickTargets(mw, redis, 100);
+
+        new StageProgressionMonitor(mw, redis, config(true, 500)).checkForPerturbation();
+
+        verify(mw, never()).createGraph(any());
     }
 
     /**
