@@ -136,6 +136,31 @@ public class RedisQueueService {
     /**
      * Clear counter-based keys for a stage (on stage progression).
      */
+    /**
+     * Channel workers watch to learn a stage has advanced.
+     *
+     * They otherwise find out by polling the fleet endpoint once per work cycle, which at current
+     * stage rates leaves them a large fraction of a stage behind: work finished against a
+     * superseded stage is written to keys this class has already cleared, and workers drift onto
+     * different graphs so they cannot pool the per-edge fill. One channel carries every campaign
+     * and workers filter, so a fleet being repointed needs no resubscribe.
+     */
+    public static final String STAGE_ADVANCED_CHANNEL = "stage_advanced";
+
+    /**
+     * Announce that a campaign's active stage changed. Fire-and-forget: Redis pub/sub has no
+     * delivery guarantee and workers keep polling the fleet endpoint regardless, so a dropped
+     * message costs latency, never correctness.
+     */
+    public void publishStageAdvanced(Integer campaignId, Integer stageId) {
+        try {
+            redisTemplate.convertAndSend(STAGE_ADVANCED_CHANNEL,
+                    String.format("{\"campaignId\":%d,\"stageId\":%d}", campaignId, stageId));
+        } catch (Exception e) {
+            log.warn("Could not announce stage {} for campaign {}: {}", stageId, campaignId, e.toString());
+        }
+    }
+
     public void clearStageCounter(Integer stageId) {
         String indexKey = STAGE_WORK_INDEX_PREFIX + stageId;
         String configKey = STAGE_CONFIG_PREFIX + stageId;

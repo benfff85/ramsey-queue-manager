@@ -318,6 +318,10 @@ public class StageProgressionMonitor {
         redisQueueService.deleteBestResult(currentStage.getStageId());
         redisQueueService.deleteTopResults(currentStage.getStageId());
 
+        // Tell the fleet immediately rather than letting each worker discover it on its next
+        // poll — at current stage rates that lag is a large slice of a stage's lifetime.
+        redisQueueService.publishStageAdvanced(createdStage.getCampaignId(), createdStage.getStageId());
+
         log.info("Stage progression complete! New stage {} is now active", createdStage.getStageId());
         return createdStage;
     }
