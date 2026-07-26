@@ -10,4 +10,5 @@ public class ProgressionPoint {
     private Long cliqueCount;
     private String createdDate;
     private String status;
+    private String details; // e.g. "PERTURBATION kick from graph ..." — used to recover kick stages on restart
 }

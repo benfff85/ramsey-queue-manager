@@ -16,12 +16,13 @@ ramsey:
     frequency-in-millis: ${STAGE_PROGRESSION_FREQUENCY_MS:30000}
   stage:
     top-results-count: ${TOP_RESULTS_COUNT:10}
+    adopt-settle-ms: ${STAGE_ADOPT_SETTLE_MS:0}
     exhaustion-delay-ms: ${EXHAUSTION_DELAY_MS:60000}
     cycle-prevention-graph-lookback-count: ${CYCLE_PREVENTION_GRAPH_LOOKBACK_COUNT:50}
     immediately-progress-on-improvement: ${IMMEDIATELY_PROGRESS_STAGE_ON_IMPROVEMENT:true}
   perturbation:
     enabled: ${PERTURBATION_ENABLED:false}
-    wall-stages: ${PERTURBATION_WALL_STAGES:500}
+    basin-stale-stages: ${PERTURBATION_BASIN_STALE_STAGES:100}
     edge-pairs: ${PERTURBATION_EDGE_PAIRS:30}
     escalation-cap: ${PERTURBATION_ESCALATION_CAP:4}
     max-novelty-retries: ${PERTURBATION_MAX_NOVELTY_RETRIES:5}

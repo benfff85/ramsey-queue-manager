@@ -54,9 +54,46 @@ public class StageProgressionMonitor {
         // Per-stage state (Redis keys, exhaustion tracking) is stage-scoped, so
         // this is just a loop over the existing per-stage logic.
         for (Stage currentStage : middlewareClient.getActiveStages()) {
-            checkStageForProgression(currentStage);
+            synchronized (lockFor(currentStage.getCampaignId())) {
+                checkStageForProgression(currentStage);
+            }
         }
     }
+
+    /**
+     * Settle timer fired for a stage: adopt the best result available now. Triggered by
+     * {@link StageAdoptScheduler} a deliberate settle window after a worker announced the stage's
+     * first new best, which is both earlier and more precisely timed than the polling loop (whose
+     * settle time is random 0..pollInterval and whose interval also floors the stage duration).
+     *
+     * <p>Runs the SAME per-stage logic as the loop, under the same per-campaign lock, so this is
+     * purely a better-timed trigger rather than a second code path. No-ops if the stage is no
+     * longer active (the loop or another timer already advanced it).
+     */
+    public void adoptAfterSettle(int stageId) {
+        for (Stage stage : middlewareClient.getActiveStages()) {
+            if (stage.getStageId() != null && stage.getStageId() == stageId) {
+                synchronized (lockFor(stage.getCampaignId())) {
+                    checkStageForProgression(stage);
+                }
+                return;
+            }
+        }
+    }
+
+    /**
+     * Per-campaign lock serializing everything that ADVANCES a stage. The progression
+     * (30s) and perturbation (60s) loops run on separate scheduler threads (pool size 100),
+     * so without this they can both advance the same stage in the same instant and leave the
+     * campaign with TWO ACTIVE stages — two competing lineages that then progress forever in
+     * lockstep (observed on campaign 10: a kick and a normal advance 10ms apart). Locking per
+     * campaign (not globally) keeps unrelated campaigns progressing in parallel.
+     */
+    private Object lockFor(Integer campaignId) {
+        return campaignLocks.computeIfAbsent(campaignId, k -> new Object());
+    }
+
+    private final Map<Integer, Object> campaignLocks = new ConcurrentHashMap<>();
 
     private void checkStageForProgression(Stage currentStage) {
         Integer stageId = currentStage.getStageId();
@@ -232,7 +269,20 @@ public class StageProgressionMonitor {
      * (shared by normal progression and perturbation kicks): create stage, init
      * Redis counters, clear the old stage's keys.
      */
+    /**
+     * Advance a campaign: deactivate {@code currentStage} and create a new ACTIVE stage on
+     * {@code savedGraph}. Returns null (advancing nothing) if the stage is no longer ACTIVE —
+     * both scheduled loops iterate a snapshot of getActiveStages() taken before they acquire
+     * the campaign lock, so a stage can already have been advanced by the other loop by the
+     * time we get here. Advancing it again would create a SECOND active stage.
+     */
     private Stage switchToNewStage(Stage currentStage, Graph savedGraph, String details) {
+        if (!isStillActive(currentStage)) {
+            log.info("Stage {} is no longer ACTIVE (already advanced); skipping advance ({})",
+                    currentStage.getStageId(), details);
+            return null;
+        }
+
         // Mark current stage as INACTIVE
         log.info("Marking stage {} as INACTIVE", currentStage.getStageId());
         currentStage.setStatus(Stage.Status.INACTIVE);
@@ -268,6 +318,10 @@ public class StageProgressionMonitor {
         redisQueueService.deleteBestResult(currentStage.getStageId());
         redisQueueService.deleteTopResults(currentStage.getStageId());
 
+        // Tell the fleet immediately rather than letting each worker discover it on its next
+        // poll — at current stage rates that lag is a large slice of a stage's lifetime.
+        redisQueueService.publishStageAdvanced(createdStage.getCampaignId(), createdStage.getStageId());
+
         log.info("Stage progression complete! New stage {} is now active", createdStage.getStageId());
         return createdStage;
     }
@@ -277,12 +331,15 @@ public class StageProgressionMonitor {
     ////////////////////////////////////////////////////////////////////////////////
 
     // Per-campaign: the stage id of the last kick, and how many consecutive kicks
-    // have happened without a new campaign minimum (drives escalation). In-memory:
-    // after a QM restart the worst case is one early re-kick of a walled campaign,
-    // which is harmless (kicks always start from the campaign-minimum incumbent).
+    // have happened without a new campaign minimum (drives escalation). These live in
+    // memory but are REHYDRATED from persisted history on first use after a restart
+    // (hydrateKickStateFromHistory), so a QM restart resumes the wall/escalation instead
+    // of firing an early kick and resetting the escalation ladder.
     private final Map<Integer, Integer> lastKickStageId = new ConcurrentHashMap<>();
     private final Map<Integer, Integer> fruitlessKicks = new ConcurrentHashMap<>();
     private final java.util.Random perturbationRandom = new java.util.Random();
+    // Kick stages are recognized by this details prefix (set when a kick creates its stage).
+    static final String KICK_DETAILS_PREFIX = "PERTURBATION";
 
     /**
      * ILS kick: when a campaign has gone {@code wallStages} stages with no new
@@ -297,7 +354,9 @@ public class StageProgressionMonitor {
         }
         for (Stage stage : middlewareClient.getActiveStages()) {
             try {
-                maybePerturbCampaign(stage);
+                synchronized (lockFor(stage.getCampaignId())) {
+                    maybePerturbCampaign(stage);
+                }
             } catch (Exception e) {
                 log.warn("Perturbation check failed for campaign {}: {}", stage.getCampaignId(), e.toString());
             }
@@ -309,35 +368,46 @@ public class StageProgressionMonitor {
         Integer campaignId = currentStage.getCampaignId();
 
         List<ProgressionPoint> history = middlewareClient.getProgression(campaignId);
-        if (history.size() < cfg.getWallStages()) {
-            return; // too young to be walled
+        if (history.size() < cfg.getBasinStaleStages()) {
+            return; // too young to have stalled
         }
 
-        // Campaign minimum (the incumbent) and the first stage that achieved it.
-        ProgressionPoint minPoint = history.stream()
-                .filter(p -> p.getCliqueCount() != null)
-                .min(java.util.Comparator.comparingLong(ProgressionPoint::getCliqueCount)
-                        .thenComparing(ProgressionPoint::getStageId))
-                .orElse(null);
+        // Campaign minimum (the incumbent) and the first stage that achieved it. This is what a
+        // kick restarts FROM, and what decides escalation — it is NOT the staleness clock.
+        ProgressionPoint minPoint = minPointFrom(history, Integer.MIN_VALUE);
         if (minPoint == null) {
             return;
         }
 
-        long stagesSinceMin = history.stream()
-                .filter(p -> p.getStageId() > minPoint.getStageId())
+        // Recover kick state after a restart before the gate, so the basin window below starts at
+        // the right stage and we don't re-kick early.
+        hydrateKickStateFromHistory(campaignId, history, minPoint);
+        Integer lastKick = lastKickStageId.get(campaignId);
+
+        // Staleness is measured inside the CURRENT BASIN — stages since this basin's own best
+        // stage — not as a fixed count since the kick. A descent that is still finding new minima
+        // therefore runs as long as it needs, and a basin that has flattened is kicked promptly.
+        // The fixed stages-since-kick wall did both badly: it cut three campaign-10 descents off
+        // while they were still in free fall (kicks 18/19/20 each bottomed out on their FINAL
+        // stage, floors 58k/158k/81k versus a 25,758 incumbent), while flat basins idled for
+        // thousands of stages after their floor had stopped moving.
+        //
+        // Before the first kick the basin IS the whole campaign, so this also subsumes the old
+        // "stages since the campaign min" wall.
+        int basinStart = lastKick == null ? Integer.MIN_VALUE : lastKick;
+        ProgressionPoint basinMin = minPointFrom(history, basinStart);
+        if (basinMin == null) {
+            return;
+        }
+        long stagesSinceBasinMin = history.stream()
+                .filter(p -> p.getStageId() > basinMin.getStageId())
                 .count();
-        if (stagesSinceMin < cfg.getWallStages()) {
+        if (stagesSinceBasinMin < cfg.getBasinStaleStages()) {
             resetKickTrackingIfImproved(campaignId, minPoint.getStageId());
-            return; // not walled
+            return; // basin is still improving
         }
 
-        // Don't re-kick until another full wall has elapsed since the last kick.
-        Integer lastKick = lastKickStageId.get(campaignId);
         if (lastKick != null) {
-            long stagesSinceKick = history.stream().filter(p -> p.getStageId() > lastKick).count();
-            if (stagesSinceKick < cfg.getWallStages()) {
-                return;
-            }
             // The previous kick produced no new min (min stage predates the kick) -> escalate.
             if (minPoint.getStageId() < lastKick) {
                 fruitlessKicks.merge(campaignId, 1, Integer::sum);
@@ -346,7 +416,11 @@ public class StageProgressionMonitor {
             }
         }
 
-        int multiplier = Math.min(fruitlessKicks.getOrDefault(campaignId, 0) + 1, cfg.getEscalationCap());
+        // Geometric escalation: each consecutive fruitless kick doubles the strength
+        // (x1, x2, x4, x8, ...) up to the cap. streak is capped before the shift to avoid
+        // int overflow; the min with the cap bounds it regardless.
+        int streak = fruitlessKicks.getOrDefault(campaignId, 0);
+        int multiplier = Math.min(1 << Math.min(streak, 30), cfg.getEscalationCap());
         int pairs = cfg.getEdgePairs() * multiplier;
 
         Graph incumbent = middlewareClient.getGraphById(minPoint.getGraphId());
@@ -356,12 +430,43 @@ public class StageProgressionMonitor {
             return;
         }
 
-        log.info("PERTURBATION: campaign {} walled ({} stages past min {} @ stage {}); kicking incumbent "
-                        + "graph {} with {} edge pairs (escalation x{})",
-                campaignId, stagesSinceMin, minPoint.getCliqueCount(), minPoint.getStageId(),
+        log.info("PERTURBATION: campaign {} basin stale ({} stages past basin floor {} @ stage {}; "
+                        + "incumbent {} @ stage {}); kicking incumbent graph {} with {} edge pairs "
+                        + "(escalation x{})",
+                campaignId, stagesSinceBasinMin, basinMin.getCliqueCount(), basinMin.getStageId(),
+                minPoint.getCliqueCount(), minPoint.getStageId(),
                 incumbent.getGraphId(), pairs, multiplier);
 
         perturbAndAdvance(currentStage, incumbent, pairs, multiplier);
+    }
+
+    /**
+     * Lowest-count point at or after {@code fromStageId}, earliest stage breaking ties.
+     * With {@link Integer#MIN_VALUE} this is the campaign incumbent; with the last kick's stage
+     * it is the current basin's floor. The kick stage itself is always a spike (a perturbed graph
+     * counts far worse than the incumbent it came from), so including it never skews the min.
+     */
+    private static ProgressionPoint minPointFrom(List<ProgressionPoint> history, int fromStageId) {
+        return history.stream()
+                .filter(p -> p.getCliqueCount() != null && p.getStageId() >= fromStageId)
+                .min(java.util.Comparator.comparingLong(ProgressionPoint::getCliqueCount)
+                        .thenComparing(ProgressionPoint::getStageId))
+                .orElse(null);
+    }
+
+    /**
+     * True if the stage is still ACTIVE upstream. Fails OPEN on a middleware error: a transient
+     * fetch failure shouldn't stall legitimate progression, and the campaign lock already covers
+     * the common race.
+     */
+    private boolean isStillActive(Stage stage) {
+        try {
+            return middlewareClient.getActiveStages().stream()
+                    .anyMatch(s -> stage.getStageId().equals(s.getStageId()));
+        } catch (Exception e) {
+            log.warn("Could not verify stage {} still ACTIVE ({}); proceeding", stage.getStageId(), e.toString());
+            return true;
+        }
     }
 
     private void resetKickTrackingIfImproved(Integer campaignId, Integer minStageId) {
@@ -369,6 +474,40 @@ public class StageProgressionMonitor {
         if (lastKick != null && minStageId > lastKick) {
             fruitlessKicks.remove(campaignId); // the kick paid off
         }
+    }
+
+    /**
+     * Restore in-memory kick state from the persisted progression after a QM restart, so a
+     * restart doesn't skip the re-kick gate (firing an early kick) or reset the escalation
+     * ladder. No-op once the campaign has in-memory state, or if it has never been kicked.
+     * Kick stages are identified authoritatively by their {@code PERTURBATION} details
+     * marker (a clique-count heuristic is unreliable: big kicks' descents drift wildly and
+     * cross any threshold many times). Escalation streak = kicks after the current min,
+     * minus the last one (whose own fruitfulness is only decided at the next kick), matching
+     * the live counter.
+     */
+    void hydrateKickStateFromHistory(Integer campaignId, List<ProgressionPoint> history, ProgressionPoint minPoint) {
+        if (lastKickStageId.containsKey(campaignId)) {
+            return; // in-memory state is authoritative once present
+        }
+        List<Integer> kickStages = history.stream()
+                .filter(p -> p.getDetails() != null && p.getDetails().startsWith(KICK_DETAILS_PREFIX))
+                .map(ProgressionPoint::getStageId)
+                .sorted()
+                .toList();
+        if (kickStages.isEmpty()) {
+            return; // never kicked -> leave state empty (first-kick behavior)
+        }
+        int lastKick = kickStages.get(kickStages.size() - 1);
+        lastKickStageId.put(campaignId, lastKick);
+        long kicksAfterMin = kickStages.stream().filter(s -> s > minPoint.getStageId()).count();
+        int streak = (int) Math.max(0, kicksAfterMin - 1);
+        if (streak > 0) {
+            fruitlessKicks.put(campaignId, streak);
+        }
+        log.info("PERTURBATION: rehydrated kick state for campaign {} from history "
+                + "({} kicks, lastKick stage {}, fruitless streak {})",
+                campaignId, kickStages.size(), lastKick, streak);
     }
 
     private void perturbAndAdvance(Stage currentStage, Graph incumbent, int pairs, int multiplier) {
@@ -400,6 +539,13 @@ public class StageProgressionMonitor {
                     "PERTURBATION kick from graph " + incumbent.getGraphId()
                             + " (" + incumbent.getCliqueCount() + "), pairs=" + pairs
                             + ", escalation=x" + multiplier);
+            if (created == null) {
+                // The stage was advanced by the progression loop first; skip this kick and
+                // retry on a later tick (the campaign is still walled, so nothing is lost).
+                log.info("Perturbation: campaign {} stage advanced concurrently; skipping kick",
+                        currentStage.getCampaignId());
+                return;
+            }
             lastKickStageId.put(currentStage.getCampaignId(), created.getStageId());
             return;
         }
