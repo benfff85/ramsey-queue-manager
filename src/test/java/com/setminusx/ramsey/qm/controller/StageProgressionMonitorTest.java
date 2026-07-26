@@ -180,4 +180,22 @@ class StageProgressionMonitorTest {
         b.setGraphBitstring("0101"); // SA-style result -> simple hash path
         return b;
     }
+
+    /**
+     * Both ..._WITH_SINGLES strategies enumerate the same space and differ only in ordering, so
+     * they must produce the same total. The worker refuses a stage whose total disagrees with the
+     * enumerator it builds, so a mismatch here would stall the fleet outright.
+     */
+    @Test
+    void sequential_and_cardinality_strategies_agree_on_the_total() {
+        long red = 19811, blue = 19810;
+        long expected = red + blue + red * blue;
+        assertEquals(expected,
+                StageProgressionMonitor.computeTotalWorkUnits(red, blue, "SEQUENTIAL_WITH_SINGLES"));
+        assertEquals(expected,
+                StageProgressionMonitor.computeTotalWorkUnits(red, blue, "DUAL_EDGE_CARDINALITY_WITH_SINGLES"));
+        // A strategy without a singles block is pairs only.
+        assertEquals(red * blue,
+                StageProgressionMonitor.computeTotalWorkUnits(red, blue, "DUAL_EDGE_CARDINALITY"));
+    }
 }
