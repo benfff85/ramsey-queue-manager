@@ -587,7 +587,11 @@ public class StageProgressionMonitor {
      */
     static long computeTotalWorkUnits(long redCount, long blueCount, String strategy) {
         long pairs = redCount * blueCount;
-        if ("DUAL_EDGE_CARDINALITY_WITH_SINGLES".equals(strategy)) {
+        // Both ..._WITH_SINGLES strategies enumerate the same space — every edge as a single flip,
+        // then every (red, blue) pair. They differ only in the ORDER within each block, so the
+        // total is identical and the worker's cross-check passes either way.
+        if ("DUAL_EDGE_CARDINALITY_WITH_SINGLES".equals(strategy)
+                || "SEQUENTIAL_WITH_SINGLES".equals(strategy)) {
             return redCount + blueCount + pairs;
         }
         return pairs;
