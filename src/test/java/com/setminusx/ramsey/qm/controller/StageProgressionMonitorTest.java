@@ -7,6 +7,8 @@ import com.setminusx.ramsey.qm.model.Graph;
 import com.setminusx.ramsey.qm.model.Stage;
 import com.setminusx.ramsey.qm.service.RedisQueueService;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 
 import java.util.List;
 
@@ -14,7 +16,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -197,5 +203,54 @@ class StageProgressionMonitorTest {
         // A strategy without a singles block is pairs only.
         assertEquals(red * blue,
                 StageProgressionMonitor.computeTotalWorkUnits(red, blue, "DUAL_EDGE_CARDINALITY"));
+    }
+
+    /**
+     * A stage must not become discoverable before it is workable.
+     *
+     * <p>Workers find work in two steps: read the campaign's ACTIVE stage from the middleware,
+     * then read {@code stage_config:{stageId}} from Redis. Creating the stage ACTIVE before
+     * seeding that config advertised a stage nobody could work, and every worker polling inside
+     * the gap cleared its cache and slept — measured at ~13% of each worker's wall clock. So the
+     * stage is created INACTIVE and only flipped to ACTIVE once the config exists.
+     */
+    @Test
+    void newStageBecomesActiveOnlyAfterItsRedisConfigIsSeeded() {
+        MiddlewareClient mw = mock(MiddlewareClient.class);
+        RedisQueueService redis = mock(RedisQueueService.class);
+        RamseyConfig config = mock(RamseyConfig.class);
+
+        RamseyConfig.Stage stageCfg = new RamseyConfig.Stage();
+        when(config.getStage()).thenReturn(stageCfg);
+
+        when(mw.getActiveStages()).thenReturn(List.of(activeStage()));
+        when(mw.getGraphById(7)).thenReturn(baseGraph(100));
+        when(redis.getTopResults(42, 1)).thenReturn(List.of(improvement(90)));
+        when(redis.isGraphAlreadyProcessed(anyString())).thenReturn(false);
+
+        Graph saved = baseGraph(90);
+        saved.setGraphId(8);
+        saved.setEdgeData("0101"); // 2 red / 2 blue, enough for the work-unit total
+        when(mw.createGraph(any())).thenReturn(saved);
+
+        Stage created = new Stage();
+        created.setStageId(43);
+        created.setCampaignId(10);
+        created.setBaseGraphId(8);
+        created.setWorkEnumerationStrategy("SEQUENTIAL_WITH_SINGLES"); // so Redis seeding runs
+        when(mw.createStage(any())).thenReturn(created);
+
+        new StageProgressionMonitor(mw, redis, config).checkForProgression();
+
+        // It is created INACTIVE — never advertised before its config exists.
+        ArgumentCaptor<Stage> createArg = ArgumentCaptor.forClass(Stage.class);
+        verify(mw).createStage(createArg.capture());
+        assertEquals(Stage.Status.INACTIVE, createArg.getValue().getStatus());
+
+        // ...and the seeding strictly precedes the activation.
+        InOrder order = inOrder(redis, mw);
+        order.verify(redis).initializeStageCounter(eq(43), any(), any(), anyLong(), anyString());
+        order.verify(mw).updateStage(argThat(
+                s -> s.getStageId() == 43 && s.getStatus() == Stage.Status.ACTIVE));
     }
 }

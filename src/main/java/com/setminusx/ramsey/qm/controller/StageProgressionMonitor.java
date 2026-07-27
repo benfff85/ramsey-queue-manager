@@ -30,6 +30,11 @@ import java.util.stream.Collectors;
 @Component
 public class StageProgressionMonitor {
 
+    /** Attempts to flip a prepared stage to ACTIVE before giving up. See {@link #activateStage}. */
+    private static final int ACTIVATION_ATTEMPTS = 3;
+    /** Pause between activation attempts. Short: the fleet is idle until this succeeds. */
+    private static final long ACTIVATION_RETRY_MILLIS = 50L;
+
     private final MiddlewareClient middlewareClient;
     private final RedisQueueService redisQueueService;
     private final RamseyConfig ramseyConfig;
@@ -288,9 +293,20 @@ public class StageProgressionMonitor {
         currentStage.setStatus(Stage.Status.INACTIVE);
         middlewareClient.updateStage(currentStage);
 
-        // Create new active stage with default enumeration strategy
+        // Create the new stage INACTIVE, seed its Redis config, and only then activate it.
+        //
+        // Workers discover work in two steps: they read the campaign's ACTIVE stage from the
+        // middleware, then read stage_config:{stageId} from Redis. Creating the stage ACTIVE
+        // before seeding that config published a stage that could not yet be worked. Every worker
+        // polling inside the gap found no config, cleared its stage cache and slept 25ms —
+        // measured at 19-73ms of gap per stage, ~13% of a stage's lifetime at the current
+        // sub-second cadence, and ~13.5% of each worker's wall clock spent in those retries.
+        //
+        // Creating it INACTIVE closes the gap: the stage is invisible until it is workable. Note
+        // this narrows rather than widens the two-competing-lineages hazard described above —
+        // the window now holds ZERO active stages for this campaign rather than one.
         Stage newStage = new Stage();
-        newStage.setStatus(Stage.Status.ACTIVE);
+        newStage.setStatus(Stage.Status.INACTIVE);
         newStage.setBaseGraphId(savedGraph.getGraphId());
         newStage.setCampaignId(currentStage.getCampaignId());
         newStage.setDetails(details);
@@ -303,13 +319,16 @@ public class StageProgressionMonitor {
         }
 
         Stage createdStage = middlewareClient.createStage(newStage);
-        log.info("Created new stage {} with base graph {} ({})",
+        log.info("Created new stage {} (inactive) with base graph {} ({})",
                 createdStage.getStageId(), savedGraph.getGraphId(), details);
 
         // Initialize counter-based mode for new stage (before clearing old stage)
         if (createdStage.getWorkEnumerationStrategy() != null) {
             initializeRedisForStage(createdStage, savedGraph);
         }
+
+        // Config is in place — publish the stage to the fleet.
+        activateStage(createdStage);
 
         // Clear Redis queue and counter keys for old stage
         log.info("Clearing Redis keys for old stage {}", currentStage.getStageId());
@@ -324,6 +343,43 @@ public class StageProgressionMonitor {
 
         log.info("Stage progression complete! New stage {} is now active", createdStage.getStageId());
         return createdStage;
+    }
+
+    /**
+     * Flip a fully-prepared stage to ACTIVE, retrying briefly on a transient middleware error.
+     *
+     * <p>Between creating the stage and this call the campaign has no ACTIVE stage, and nothing
+     * else will reactivate it: {@link #ensureActiveStageInitialized()} repairs a missing Redis
+     * config but returns early when there is no active stage to repair. A momentary blip must
+     * therefore not be able to strand a campaign, so retry before giving up — and if it is still
+     * failing, say exactly what a human has to do about it.
+     */
+    private void activateStage(Stage stage) {
+        stage.setStatus(Stage.Status.ACTIVE);
+        for (int attempt = 1; attempt <= ACTIVATION_ATTEMPTS; attempt++) {
+            try {
+                middlewareClient.updateStage(stage);
+                return;
+            } catch (RuntimeException e) {
+                log.warn("Activating stage {} failed (attempt {}/{}): {}",
+                        stage.getStageId(), attempt, ACTIVATION_ATTEMPTS, e.toString());
+                if (attempt < ACTIVATION_ATTEMPTS) {
+                    sleepQuietly(ACTIVATION_RETRY_MILLIS);
+                }
+            }
+        }
+        log.error("Could not activate stage {} after {} attempts. Campaign {} now has NO active "
+                + "stage and its workers will idle until this is repaired "
+                + "(set stage {} to ACTIVE).",
+                stage.getStageId(), ACTIVATION_ATTEMPTS, stage.getCampaignId(), stage.getStageId());
+    }
+
+    private void sleepQuietly(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     ////////////////////////////////////////////////////////////////////////////////
