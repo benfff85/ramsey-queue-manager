@@ -164,8 +164,14 @@ public class RedisQueueService {
     public void clearStageCounter(Integer stageId) {
         String indexKey = STAGE_WORK_INDEX_PREFIX + stageId;
         String configKey = STAGE_CONFIG_PREFIX + stageId;
+        String processedKey = PROCESSED_COUNT_PREFIX + stageId;
         redisTemplate.delete(indexKey);
         redisTemplate.delete(configKey);
+        // processed_count was created on every stage and deleted nowhere, leaking exactly one key
+        // per stage forever: 332,555 of them had accumulated on the live instance (of 713,374 keys
+        // / 653 MB) across campaign 3's ~330k stages. Nothing reads a retired stage's count, so the
+        // only symptom was unbounded growth toward Dragonfly's 7 GB cap and ever-slower scans.
+        redisTemplate.delete(processedKey);
         log.info("Cleared counter-based keys for stage {}", stageId);
     }
 
