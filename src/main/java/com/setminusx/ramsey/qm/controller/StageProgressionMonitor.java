@@ -76,6 +76,17 @@ public class StageProgressionMonitor {
      * longer active (the loop or another timer already advanced it).
      */
     public void adoptAfterSettle(int stageId) {
+        checkStageNow(stageId);
+    }
+
+    /**
+     * Run the per-stage progression check for one stage, right now.
+     *
+     * <p>Runs the SAME per-stage logic as the scheduled loop, under the same per-campaign lock, so
+     * every out-of-band trigger is a better-timed entry to one code path rather than a second one.
+     * No-ops if the stage is no longer active, so a duplicate or late event is harmless.
+     */
+    public void checkStageNow(int stageId) {
         for (Stage stage : middlewareClient.getActiveStages()) {
             if (stage.getStageId() != null && stage.getStageId() == stageId) {
                 synchronized (lockFor(stage.getCampaignId())) {
