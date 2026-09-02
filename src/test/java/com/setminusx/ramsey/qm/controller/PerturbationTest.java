@@ -317,20 +317,22 @@ class PerturbationTest {
     }
 
     /**
-     * Regression: the progression and perturbation loops iterate a snapshot of getActiveStages()
-     * and run on separate scheduler threads. If the stage was already advanced by the other loop,
-     * kicking it again would create a SECOND active stage (two competing lineages, as seen live on
-     * campaign 10). The kick must be skipped when the stage is no longer ACTIVE.
+     * Regression: the perturbation loop snapshots active stages before taking the campaign lock.
+     * At sub-second stage cadence, the progression event can advance that snapshot while the kick
+     * waits for the lock. Once inside the lock, the kick must rebind to the campaign's fresh ACTIVE
+     * stage and replace that stage exactly once — using the stale snapshot either loses every kick
+     * or, without the final active guard, creates a competing lineage.
      */
     @Test
-    void staleStage_alreadyAdvanced_doesNotCreateSecondActiveStage() {
+    void staleSnapshot_rebindsToCurrentStageAndAppliesKickOnce() {
         MiddlewareClient mw = mock(MiddlewareClient.class);
         RedisQueueService redis = mock(RedisQueueService.class);
         Stage stale = activeStage(1000, 3);
+        Stage current = activeStage(1001, 3);
         // The loop's snapshot still contains stage 1000, but upstream it is gone (advanced to 1001).
         when(mw.getActiveStages())
-                .thenReturn(List.of(stale))          // snapshot the loop iterates
-                .thenReturn(List.of(activeStage(1001, 3))); // re-read inside switchToNewStage
+                .thenReturn(List.of(stale))
+                .thenReturn(List.of(current));
         when(mw.getProgression(3)).thenReturn(walledHistory(400, 1000, 600));
         Graph incumbent = new Graph();
         incumbent.setGraphId(400);
@@ -342,10 +344,17 @@ class PerturbationTest {
         Graph saved = new Graph();
         saved.setGraphId(9000);
         when(mw.createGraph(any())).thenReturn(saved);
+        Stage created = new Stage();
+        created.setStageId(1002);
+        when(mw.createStage(any())).thenReturn(created);
 
         new StageProgressionMonitor(mw, redis, config(true, 500)).checkForPerturbation();
 
-        verify(mw, never()).createStage(any()); // no second ACTIVE stage
+        assertEquals(Stage.Status.ACTIVE, stale.getStatus(), "the stale snapshot is never mutated");
+        assertEquals(Stage.Status.INACTIVE, current.getStatus(), "the fresh active stage is replaced");
+        verify(mw, never()).updateStage(same(stale));
+        verify(mw).updateStage(same(current));
+        verify(mw).createStage(any());
     }
 
     private static int count(String s, char c) {

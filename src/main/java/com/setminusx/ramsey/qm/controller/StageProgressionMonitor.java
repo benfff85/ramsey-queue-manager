@@ -102,8 +102,10 @@ public class StageProgressionMonitor {
      * (30s) and perturbation (60s) loops run on separate scheduler threads (pool size 100),
      * so without this they can both advance the same stage in the same instant and leave the
      * campaign with TWO ACTIVE stages — two competing lineages that then progress forever in
-     * lockstep (observed on campaign 10: a kick and a normal advance 10ms apart). Locking per
-     * campaign (not globally) keeps unrelated campaigns progressing in parallel.
+     * lockstep (observed on campaign 10: a kick and a normal advance 10ms apart). A caller that
+     * waits for this lock must re-read the campaign's ACTIVE stage after acquiring it; the lock
+     * serializes future changes but cannot make a pre-lock snapshot current. Locking per campaign
+     * (not globally) keeps unrelated campaigns progressing in parallel.
      */
     private Object lockFor(Integer campaignId) {
         return campaignLocks.computeIfAbsent(campaignId, k -> new Object());
@@ -288,9 +290,9 @@ public class StageProgressionMonitor {
     /**
      * Advance a campaign: deactivate {@code currentStage} and create a new ACTIVE stage on
      * {@code savedGraph}. Returns null (advancing nothing) if the stage is no longer ACTIVE —
-     * both scheduled loops iterate a snapshot of getActiveStages() taken before they acquire
-     * the campaign lock, so a stage can already have been advanced by the other loop by the
-     * time we get here. Advancing it again would create a SECOND active stage.
+     * callers can iterate a snapshot of getActiveStages() taken before they acquire the campaign
+     * lock, so a stage can already have been advanced by another trigger by the time we get here.
+     * Advancing it again would create a SECOND active stage.
      */
     private Stage switchToNewStage(Stage currentStage, Graph savedGraph, String details) {
         if (!isStillActive(currentStage)) {
@@ -422,7 +424,20 @@ public class StageProgressionMonitor {
         for (Stage stage : middlewareClient.getActiveStages()) {
             try {
                 synchronized (lockFor(stage.getCampaignId())) {
-                    maybePerturbCampaign(stage);
+                    // The outer snapshot discovers which campaigns need checking. It is not safe
+                    // to adopt from: a completion event may advance that stage while this thread
+                    // waits for the lock. Rebind under the lock so the kick replaces the lineage's
+                    // current tip rather than being discarded against a stale stage every minute.
+                    Stage currentStage = middlewareClient.getActiveStages().stream()
+                            .filter(active -> stage.getCampaignId().equals(active.getCampaignId()))
+                            .findFirst()
+                            .orElse(null);
+                    if (currentStage == null) {
+                        log.info("Perturbation: campaign {} no longer has an ACTIVE stage; skipping",
+                                stage.getCampaignId());
+                        continue;
+                    }
+                    maybePerturbCampaign(currentStage);
                 }
             } catch (Exception e) {
                 log.warn("Perturbation check failed for campaign {}: {}", stage.getCampaignId(), e.toString());
@@ -607,8 +622,8 @@ public class StageProgressionMonitor {
                             + " (" + incumbent.getCliqueCount() + "), pairs=" + pairs
                             + ", escalation=x" + multiplier);
             if (created == null) {
-                // The stage was advanced by the progression loop first; skip this kick and
-                // retry on a later tick (the campaign is still walled, so nothing is lost).
+                // Final safety net for an out-of-process stage change or other state mutation that
+                // does not participate in this queue manager's campaign lock.
                 log.info("Perturbation: campaign {} stage advanced concurrently; skipping kick",
                         currentStage.getCampaignId());
                 return;
