@@ -1,5 +1,10 @@
-# Use a Maven base image for building the application
-FROM maven:3.9-eclipse-temurin-25 AS build
+# Use a Java 27 base image with Maven for building the application
+FROM bellsoft/liberica-openjdk-debian:27 AS build
+
+# Copy Maven from official maven image
+COPY --from=maven:3.9 /usr/share/maven /usr/share/maven
+ENV MAVEN_HOME=/usr/share/maven
+ENV PATH="/usr/share/maven/bin:${PATH}"
 
 # Set the working directory
 WORKDIR /app
@@ -15,7 +20,7 @@ COPY src ./src
 RUN mvn clean package -DskipTests
 
 # Use a smaller JRE image for runtime
-FROM eclipse-temurin:25-jre AS final
+FROM bellsoft/liberica-openjre-debian:27 AS final
 
 # Set the working directory
 WORKDIR /app

@@ -13,17 +13,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Download Eclipse Temurin JDK 25
+      - name: Download Eclipse Temurin JDK 27
         run: |
-          DOWNLOAD_URL=$(curl -s "https://api.adoptium.net/v3/assets/feature_releases/25/ga?architecture=x64&heap_size=normal&image_type=jdk&jvm_impl=hotspot&os=linux" | jq -r '.[0].binaries[0].package.link')
+          DOWNLOAD_URL=$(curl -s "https://api.adoptium.net/v3/assets/feature_releases/27/ga?architecture=x64&heap_size=normal&image_type=jdk&jvm_impl=hotspot&os=linux" | jq -r '.[0].binaries[0].package.link')
           if [ -z "$DOWNLOAD_URL" ]; then
-            echo "Could not find a suitable JDK 25 binary download URL."
+            echo "Could not find a suitable JDK 27 binary download URL."
             exit 1
           fi
           echo "Download URL: $DOWNLOAD_URL"
-          wget -O openjdk25.tar.gz "$DOWNLOAD_URL"
-          tar -xzf openjdk25.tar.gz
-          JAVA_DIR=$(tar -tf openjdk25.tar.gz | head -1 | cut -f1 -d"/")
+          wget -O openjdk27.tar.gz "$DOWNLOAD_URL"
+          tar -xzf openjdk27.tar.gz
+          JAVA_DIR=$(tar -tf openjdk27.tar.gz | head -1 | cut -f1 -d"/")
           echo "JAVA_HOME=$PWD/$JAVA_DIR" >> $GITHUB_ENV
           echo "$PWD/$JAVA_DIR/bin" >> $GITHUB_PATH
 
