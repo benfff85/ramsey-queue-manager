@@ -55,6 +55,16 @@ public class ProgressionHistory {
         return summary;
     }
 
+    /** The incumbent count from the last refresh, or null if this campaign has not been read yet. */
+    public Long knownIncumbentCount(int campaignId) {
+        Summary s = summaries.get(campaignId);
+        if (s == null) {
+            return null;
+        }
+        Point p = s.incumbent();
+        return p == null ? null : p.cliqueCount();
+    }
+
     /** One stage's position in its campaign, as far as the perturbation check needs it. */
     public record Point(int stageId, Integer graphId, long cliqueCount, long idx) {
         static final Comparator<Point> LOWEST_THEN_EARLIEST =
