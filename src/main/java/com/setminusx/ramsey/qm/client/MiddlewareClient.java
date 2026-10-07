@@ -133,6 +133,15 @@ public class MiddlewareClient {
         return restTemplate.getForObject(graphUrl + "/" + id, Graph.class);
     }
 
+    /** The graph row as stored: in DELTA mode most rows come back without edge data. */
+    public Graph getStoredGraph(Integer id) {
+        java.net.URI uri = UriComponentsBuilder.fromUriString(graphUrl + "/" + id)
+                .queryParam("reconstruct", "none")
+                .build()
+                .toUri();
+        return restTemplate.getForObject(uri, Graph.class);
+    }
+
     /**
      * Get a derived graph (computed but not saved).
      * 
