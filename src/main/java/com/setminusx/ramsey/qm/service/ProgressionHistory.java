@@ -51,18 +51,20 @@ public class ProgressionHistory {
                 page = middlewareClient.getProgressionPage(campaignId, summary.lastStageId, PAGE_SIZE);
                 page.forEach(summary::accept);
             } while (page.size() == PAGE_SIZE);
+            summary.publishedIncumbentCount = summary.incumbent == null ? null : summary.incumbent.cliqueCount();
         }
         return summary;
     }
 
-    /** The incumbent count from the last refresh, or null if this campaign has not been read yet. */
+    /**
+     * The incumbent count as of the last completed refresh, or null before the first one completes.
+     * Lock-free: the progression path calls this under the campaign lock, and must not wait on a
+     * refresh that is mid-way through reading the whole history (~22 s after a QM restart). A stale
+     * value is only ever too high, which costs an extra snapshot, never a missed one.
+     */
     public Long knownIncumbentCount(int campaignId) {
         Summary s = summaries.get(campaignId);
-        if (s == null) {
-            return null;
-        }
-        Point p = s.incumbent();
-        return p == null ? null : p.cliqueCount();
+        return s == null ? null : s.publishedIncumbentCount;
     }
 
     /** One stage's position in its campaign, as far as the perturbation check needs it. */
@@ -89,6 +91,8 @@ public class ProgressionHistory {
         private int lastStageId;
         private long size;
         private Point incumbent;
+        /** {@link #incumbent}'s count, published at the end of each completed refresh. */
+        private volatile Long publishedIncumbentCount;
         private final List<Epoch> epochs = new ArrayList<>();
 
         void accept(ProgressionPoint p) {
