@@ -16,6 +16,8 @@
     <properties>
         <java.version>27</java.version>
         <lombok.version>1.18.48</lombok.version>
+        <!-- Ahead of the Spring Boot 4.1.1 BOM (3.20.0); matches ramsey-mw. -->
+        <commons-lang3.version>3.21.0</commons-lang3.version>
     </properties>
 
     <dependencies>
