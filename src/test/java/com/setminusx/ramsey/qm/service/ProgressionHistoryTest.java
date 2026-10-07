@@ -142,6 +142,41 @@ class ProgressionHistoryTest {
         assertThrows(IllegalArgumentException.class, () -> summary.floorSince(notAKick));
     }
 
+    /**
+     * The progression path asks for the incumbent (to decide snapshot vs delta) while the perturbation
+     * thread may be mid-way through reading the whole history -- ~22 s after a QM restart. It must
+     * never wait for that read: it gets null ("unknown", so the graph is a snapshot) until the first
+     * full read has completed.
+     */
+    @Test
+    void knownIncumbentNeverWaitsForARefreshInProgress() throws Exception {
+        java.util.concurrent.CountDownLatch inPage = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        List<ProgressionPoint> all = history(100, 9);
+        MiddlewareClient mw = mock(MiddlewareClient.class);
+        when(mw.getProgressionPage(eq(CAMPAIGN), anyInt(), anyInt())).thenAnswer(inv -> {
+            inPage.countDown();
+            release.await(5, java.util.concurrent.TimeUnit.SECONDS);
+            int since = inv.getArgument(1);
+            return all.stream().filter(p -> p.getStageId() > since).toList();
+        });
+        ProgressionHistory history = new ProgressionHistory(mw);
+        Thread reader = new Thread(() -> history.refresh(CAMPAIGN));
+        reader.start();
+        assertTrue(inPage.await(5, java.util.concurrent.TimeUnit.SECONDS), "the refresh is mid-read, holding its lock");
+
+        long t0 = System.nanoTime();
+        Long known = history.knownIncumbentCount(CAMPAIGN);
+        long waitedMs = (System.nanoTime() - t0) / 1_000_000;
+        release.countDown();
+        reader.join(5_000);
+
+        assertTrue(waitedMs < 500, "knownIncumbentCount waited " + waitedMs + " ms on a refresh in progress");
+        assertNull(known, "no incumbent is known before the first full read completes");
+        assertEquals(minPointFrom(all, Integer.MIN_VALUE).getCliqueCount(), history.knownIncumbentCount(CAMPAIGN),
+                "published once the read completes");
+    }
+
     /** A page that repeats stages already summarised must not count them twice. */
     @Test
     void overlappingPagesAreIgnored() {
