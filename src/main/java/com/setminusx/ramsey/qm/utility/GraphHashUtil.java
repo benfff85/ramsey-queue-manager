@@ -37,19 +37,7 @@ public class GraphHashUtil {
      * without actually constructing the full edge data string.
      */
     public static String computeDerivedGraphHash(Graph baseGraph, List<Edge> edgesToFlip) {
-        String edgeData = baseGraph.getEdgeData();
-        int vertexCount = baseGraph.getVertexCount();
-
-        // Convert to mutable char array
-        char[] chars = edgeData.toCharArray();
-
-        // Flip the specified edges
-        for (Edge edge : edgesToFlip) {
-            int index = getEdgeIndex(edge.getVertexOne(), edge.getVertexTwo(), vertexCount);
-            chars[index] = chars[index] == '1' ? '0' : '1';
-        }
-
-        return computeHash(new String(chars));
+        return computeHash(GraphDeriver.derive(baseGraph.getEdgeData(), baseGraph.getVertexCount(), edgesToFlip));
     }
 
     /**
@@ -57,7 +45,7 @@ public class GraphHashUtil {
      * Uses upper triangular matrix indexing: index = v1 * (n-1) - v1*(v1+1)/2 + v2
      * - 1
      */
-    private static int getEdgeIndex(int v1, int v2, int vertexCount) {
+    public static int edgeIndex(int v1, int v2, int vertexCount) {
         // Ensure v1 < v2 for upper triangular indexing
         if (v1 > v2) {
             int temp = v1;

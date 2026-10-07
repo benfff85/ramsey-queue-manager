@@ -9,6 +9,7 @@ import com.setminusx.ramsey.qm.model.Stage;
 import com.setminusx.ramsey.qm.service.ProgressionHistory;
 import com.setminusx.ramsey.qm.service.RedisQueueService;
 import com.setminusx.ramsey.qm.utility.CliqueCounter;
+import com.setminusx.ramsey.qm.utility.GraphDeriver;
 import com.setminusx.ramsey.qm.utility.GraphHashUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -42,6 +43,37 @@ public class StageProgressionMonitor {
 
     // Track when each stage was first detected as exhausted
     private final Map<Integer, Instant> exhaustionDetectedAt = new ConcurrentHashMap<>();
+
+    /**
+     * Graphs this QM created, with full edge data, keyed by id: the next stage's base. Saves a 40 KB
+     * GET (and, for delta rows, a middleware replay) on every progression check. Bounded.
+     */
+    private final Map<Integer, Graph> fullGraphCache = java.util.Collections.synchronizedMap(
+            new java.util.LinkedHashMap<>(16, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<Integer, Graph> eldest) {
+                    return size() > 64;
+                }
+            });
+
+    private RamseyConfig.GraphStorage.Mode storageMode() {
+        RamseyConfig.GraphStorage gs = ramseyConfig.getGraphStorage();
+        return gs == null ? RamseyConfig.GraphStorage.Mode.OFF : gs.getMode(); // null on test mocks
+    }
+
+    private Graph baseGraphFor(Stage stage) {
+        if (storageMode() != RamseyConfig.GraphStorage.Mode.OFF) {
+            Graph cached = fullGraphCache.get(stage.getBaseGraphId());
+            if (cached != null) {
+                return cached;
+            }
+        }
+        return middlewareClient.getGraphById(stage.getBaseGraphId());
+    }
+
+    void refreshProgressionHistory(int campaignId) {
+        progressionHistory.refresh(campaignId);
+    }
 
     public StageProgressionMonitor(
             MiddlewareClient middlewareClient,
@@ -119,7 +151,7 @@ public class StageProgressionMonitor {
         Integer stageId = currentStage.getStageId();
 
         // Get current base graph
-        Graph baseGraph = middlewareClient.getGraphById(currentStage.getBaseGraphId());
+        Graph baseGraph = baseGraphFor(currentStage);
         if (baseGraph == null || baseGraph.getCliqueCount() == null) {
             log.warn("Could not fetch base graph or clique count for stage {}", stageId);
             return;
@@ -245,6 +277,53 @@ public class StageProgressionMonitor {
     }
 
     private void progressStageWithHash(Stage currentStage, Graph baseGraph, BestResult bestResult, String graphHash) {
+        RamseyConfig.GraphStorage.Mode mode = storageMode();
+        boolean sameBase = bestResult.isSimulatedAnnealingResult()
+                || baseGraph.getGraphId().equals(bestResult.getBaseGraphId());
+        if (mode == RamseyConfig.GraphStorage.Mode.OFF || !sameBase || baseGraph.getEdgeData() == null) {
+            progressStageFullStorage(currentStage, baseGraph, bestResult, graphHash);
+            return;
+        }
+        Graph derived = new Graph();
+        derived.setVertexCount(baseGraph.getVertexCount());
+        derived.setSubgraphSize(baseGraph.getSubgraphSize());
+        derived.setCliqueCount(bestResult.getCliqueCount());
+        derived.setIdentifiedDate(new java.util.Date());
+        derived.setGraphHash(graphHash);
+        String fullBits;
+        String source;
+        if (bestResult.isSimulatedAnnealingResult()) {
+            source = "SIMULATED_ANNEALING";
+            fullBits = bestResult.getGraphBitstring();
+            derived.setLineageDepth(0); // no flip list: always a snapshot
+        } else {
+            source = "EXHAUSTIVE";
+            String edges = formatEdgesForUrl(bestResult.getEdgesToFlip());
+            log.info("Progressing via EXHAUSTIVE result from base {} with edges {}", bestResult.getBaseGraphId(), edges);
+            fullBits = GraphDeriver.derive(baseGraph.getEdgeData(), baseGraph.getVertexCount(), bestResult.getEdgesToFlip());
+            derived.setParentGraphId(baseGraph.getGraphId());
+            derived.setFlippedEdges(edges);
+            boolean snapshot = GraphDeriver.isSnapshot(baseGraph.getLineageDepth(),
+                    ramseyConfig.getGraphStorage().getCheckpointInterval(),
+                    progressionHistory.knownIncumbentCount(currentStage.getCampaignId()),
+                    bestResult.getCliqueCount());
+            derived.setLineageDepth(snapshot ? 0 : baseGraph.getLineageDepth() + 1);
+        }
+        // SHADOW stores every graph in full (so it can be verified); DELTA only snapshots.
+        boolean storeBits = mode == RamseyConfig.GraphStorage.Mode.SHADOW || derived.getLineageDepth() == 0;
+        derived.setEdgeData(storeBits ? fullBits : null);
+
+        redisQueueService.addProcessedGraphHash(graphHash);
+        log.info("Saving derived graph with clique count {} (lineage depth {}, {})", bestResult.getCliqueCount(),
+                derived.getLineageDepth(), storeBits ? "full" : "delta");
+        Graph saved = middlewareClient.createGraph(derived);
+        log.info("Created new graph with ID: {}", saved.getGraphId());
+        saved.setEdgeData(fullBits); // the stage's Redis config and the next check need the full graph
+        fullGraphCache.put(saved.getGraphId(), saved);
+        switchToNewStage(currentStage, saved, "source: " + source);
+    }
+
+    private void progressStageFullStorage(Stage currentStage, Graph baseGraph, BestResult bestResult, String graphHash) {
         // 1. Get or construct the derived graph
         Graph derivedGraph;
         String source;
@@ -597,9 +676,15 @@ public class StageProgressionMonitor {
             kickedGraph.setVertexCount(incumbent.getVertexCount());
             kickedGraph.setSubgraphSize(incumbent.getSubgraphSize());
             kickedGraph.setCliqueCount((int) cliqueCount);
+            if (storageMode() != RamseyConfig.GraphStorage.Mode.OFF) {
+                kickedGraph.setGraphHash(hash);
+                kickedGraph.setLineageDepth(0); // a kick seed is always a snapshot
+            }
 
             redisQueueService.addProcessedGraphHash(hash);
             Graph savedGraph = middlewareClient.createGraph(kickedGraph);
+            savedGraph.setEdgeData(kicked);
+            fullGraphCache.put(savedGraph.getGraphId(), savedGraph);
             log.info("PERTURBATION: kicked graph saved as {} (cliques {} vs incumbent {})",
                     savedGraph.getGraphId(), cliqueCount, incumbent.getCliqueCount());
 
@@ -747,9 +832,12 @@ public class StageProgressionMonitor {
 
         int seeded = 0;
         for (Stage stage : recentStages) {
-            Graph graph = middlewareClient.getGraphById(stage.getBaseGraphId());
-            if (graph != null && graph.getEdgeData() != null) {
-                String hash = GraphHashUtil.computeHash(graph.getEdgeData());
+            Graph graph = middlewareClient.getStoredGraph(stage.getBaseGraphId());
+            String hash = graph == null ? null
+                    : graph.getGraphHash() != null ? graph.getGraphHash()
+                    : graph.getEdgeData() != null ? GraphHashUtil.computeHash(graph.getEdgeData())
+                    : null;
+            if (hash != null) {
                 redisQueueService.addProcessedGraphHash(hash);
                 seeded++;
             }

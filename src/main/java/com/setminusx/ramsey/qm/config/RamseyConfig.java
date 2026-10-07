@@ -22,6 +22,7 @@ public class RamseyConfig {
     private Campaign campaign;
     private Stage stage;
     private Perturbation perturbation = new Perturbation();
+    private GraphStorage graphStorage = new GraphStorage();
 
     /**
      * Iterated-local-search "kick": when the current basin has gone {@code basinStaleStages}
@@ -29,6 +30,20 @@ public class RamseyConfig {
      * copy of the campaign's best (minimum) graph. See the fleet-abstraction / perturbation plan
      * docs in ramsey-mw.
      */
+    @Data
+    public static class GraphStorage {
+        /**
+         * OFF: every graph stored in full via the middleware's derive call (pre-2026-10 behaviour).
+         * SHADOW: derive locally; store every graph in full AND record its lineage (verification).
+         * DELTA: store lineage only; full edge data on snapshots.
+         */
+        private Mode mode = Mode.OFF;
+        /** Delta hops between full snapshots; bounds the middleware's replay when it rebuilds a graph. */
+        private int checkpointInterval = 1000;
+
+        public enum Mode { OFF, SHADOW, DELTA }
+    }
+
     @Data
     public static class Perturbation {
         /** Off by default — enabling changes live search behavior. Env: PERTURBATION_ENABLED */
