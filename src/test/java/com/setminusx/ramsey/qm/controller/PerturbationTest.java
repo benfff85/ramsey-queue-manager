@@ -14,6 +14,8 @@ import java.util.Random;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
@@ -79,6 +81,15 @@ class PerturbationTest {
         return h;
     }
 
+    /** Serves {@code history} the way the middleware pages it: stage order, after the cursor, capped. */
+    private static void serve(MiddlewareClient mw, List<ProgressionPoint> history) {
+        when(mw.getProgressionPage(eq(3), anyInt(), anyInt())).thenAnswer(inv -> {
+            int since = inv.getArgument(1);
+            int limit = inv.getArgument(2);
+            return history.stream().filter(p -> p.getStageId() > since).limit(limit).toList();
+        });
+    }
+
     private ProgressionPoint point(int stageId, long clique) {
         ProgressionPoint p = new ProgressionPoint();
         p.setStageId(stageId);
@@ -100,7 +111,7 @@ class PerturbationTest {
         MiddlewareClient mw = mock(MiddlewareClient.class);
         RedisQueueService redis = mock(RedisQueueService.class);
         when(mw.getActiveStages()).thenReturn(List.of(activeStage(600, 3)));
-        when(mw.getProgression(3)).thenReturn(walledHistory(400, 1000, 100)); // wall only 100 < 500
+        serve(mw, walledHistory(400, 1000, 100)); // wall only 100 < 500
 
         new StageProgressionMonitor(mw, redis, config(true, 500)).checkForPerturbation();
 
@@ -114,7 +125,7 @@ class PerturbationTest {
         RedisQueueService redis = mock(RedisQueueService.class);
         Stage current = activeStage(1000, 3);
         when(mw.getActiveStages()).thenReturn(List.of(current));
-        when(mw.getProgression(3)).thenReturn(walledHistory(400, 1000, 600)); // wall 600 >= 500
+        serve(mw, walledHistory(400, 1000, 600)); // wall 600 >= 500
 
         // incumbent = min stage's base graph (id 400), K5 bitstring for a real count
         Graph incumbent = new Graph();
@@ -149,7 +160,7 @@ class PerturbationTest {
         MiddlewareClient mw = mock(MiddlewareClient.class);
         RedisQueueService redis = mock(RedisQueueService.class);
         when(mw.getActiveStages()).thenReturn(List.of(activeStage(1000, 3)));
-        when(mw.getProgression(3)).thenReturn(walledHistory(400, 1000, 600));
+        serve(mw, walledHistory(400, 1000, 600));
         Graph incumbent = new Graph();
         incumbent.setGraphId(400);
         incumbent.setEdgeData("1".repeat(10));
@@ -185,7 +196,7 @@ class PerturbationTest {
         for (int i = 1; i < 100; i++) h.add(point(i, 1100 + i));
         h.add(point(100, 1000)); // min
         for (int i = 101; i <= 700; i++) h.add(i == 650 ? kickPoint(i, 1050) : point(i, 1050));
-        when(mw.getProgression(3)).thenReturn(h);
+        serve(mw, h);
 
         new StageProgressionMonitor(mw, redis, config(true, 500)).checkForPerturbation();
 
@@ -205,7 +216,7 @@ class PerturbationTest {
         for (int i = 1; i < 100; i++) h.add(point(i, 1100 + i));
         h.add(point(100, 1000)); // min
         for (int i = 101; i <= 700; i++) h.add(i == 120 ? kickPoint(i, 1050) : point(i, 1050));
-        when(mw.getProgression(3)).thenReturn(h);
+        serve(mw, h);
         Graph incumbent = new Graph();
         incumbent.setGraphId(100);
         incumbent.setEdgeData("1".repeat(10));
@@ -270,7 +281,7 @@ class PerturbationTest {
         MiddlewareClient mw = mock(MiddlewareClient.class);
         RedisQueueService redis = mock(RedisQueueService.class);
         when(mw.getActiveStages()).thenReturn(List.of(activeStage(2000, 3)));
-        when(mw.getProgression(3)).thenReturn(kickedHistory(1000, 200, i -> 50_000 - i * 10L, 1800));
+        serve(mw, kickedHistory(1000, 200, i -> 50_000 - i * 10L, 1800));
         stubKickTargets(mw, redis, 100);
 
         new StageProgressionMonitor(mw, redis, config(true, 500)).checkForPerturbation();
@@ -289,7 +300,7 @@ class PerturbationTest {
         RedisQueueService redis = mock(RedisQueueService.class);
         when(mw.getActiveStages()).thenReturn(List.of(activeStage(2000, 3)));
         // Descends for 50 stages to a floor of 49,500 at stage 250, then 500 flat stages.
-        when(mw.getProgression(3)).thenReturn(
+        serve(mw, 
                 kickedHistory(1000, 200, i -> i <= 50 ? 50_000 - i * 10L : 49_500L, 550));
         stubKickTargets(mw, redis, 100);
 
@@ -307,7 +318,7 @@ class PerturbationTest {
         RedisQueueService redis = mock(RedisQueueService.class);
         when(mw.getActiveStages()).thenReturn(List.of(activeStage(2000, 3)));
         // Flat except for a single new floor 400 stages in — only 150 stages of staleness since.
-        when(mw.getProgression(3)).thenReturn(
+        serve(mw, 
                 kickedHistory(1000, 200, i -> i == 400 ? 49_000L : 49_500L, 550));
         stubKickTargets(mw, redis, 100);
 
@@ -333,7 +344,7 @@ class PerturbationTest {
         when(mw.getActiveStages())
                 .thenReturn(List.of(stale))
                 .thenReturn(List.of(current));
-        when(mw.getProgression(3)).thenReturn(walledHistory(400, 1000, 600));
+        serve(mw, walledHistory(400, 1000, 600));
         Graph incumbent = new Graph();
         incumbent.setGraphId(400);
         incumbent.setEdgeData("1".repeat(10));

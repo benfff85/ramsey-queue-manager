@@ -5,8 +5,8 @@ import com.setminusx.ramsey.qm.config.RamseyConfig;
 import com.setminusx.ramsey.qm.model.BestResult;
 import com.setminusx.ramsey.qm.model.Edge;
 import com.setminusx.ramsey.qm.model.Graph;
-import com.setminusx.ramsey.qm.model.ProgressionPoint;
 import com.setminusx.ramsey.qm.model.Stage;
+import com.setminusx.ramsey.qm.service.ProgressionHistory;
 import com.setminusx.ramsey.qm.service.RedisQueueService;
 import com.setminusx.ramsey.qm.utility.CliqueCounter;
 import com.setminusx.ramsey.qm.utility.GraphHashUtil;
@@ -38,6 +38,7 @@ public class StageProgressionMonitor {
     private final MiddlewareClient middlewareClient;
     private final RedisQueueService redisQueueService;
     private final RamseyConfig ramseyConfig;
+    private final ProgressionHistory progressionHistory;
 
     // Track when each stage was first detected as exhausted
     private final Map<Integer, Instant> exhaustionDetectedAt = new ConcurrentHashMap<>();
@@ -49,6 +50,7 @@ public class StageProgressionMonitor {
         this.middlewareClient = middlewareClient;
         this.redisQueueService = redisQueueService;
         this.ramseyConfig = ramseyConfig;
+        this.progressionHistory = new ProgressionHistory(middlewareClient);
     }
 
     @Scheduled(fixedRateString = "${ramsey.stage-progression.frequency-in-millis:30000}")
@@ -407,8 +409,6 @@ public class StageProgressionMonitor {
     private final Map<Integer, Integer> lastKickStageId = new ConcurrentHashMap<>();
     private final Map<Integer, Integer> fruitlessKicks = new ConcurrentHashMap<>();
     private final java.util.Random perturbationRandom = new java.util.Random();
-    // Kick stages are recognized by this details prefix (set when a kick creates its stage).
-    static final String KICK_DETAILS_PREFIX = "PERTURBATION";
 
     /**
      * ILS kick: when a campaign has gone {@code wallStages} stages with no new
@@ -423,6 +423,10 @@ public class StageProgressionMonitor {
         }
         for (Stage stage : middlewareClient.getActiveStages()) {
             try {
+                // Read the campaign's new history BEFORE taking its lock. Stage progression waits on
+                // that lock, and the first read after a restart pages through the whole series
+                // (~70 pages, ~25 s at 3.66M stages). The check re-reads the tail under the lock.
+                progressionHistory.refresh(stage.getCampaignId());
                 synchronized (lockFor(stage.getCampaignId())) {
                     // The outer snapshot discovers which campaigns need checking. It is not safe
                     // to adopt from: a completion event may advance that stage while this thread
@@ -449,14 +453,16 @@ public class StageProgressionMonitor {
         RamseyConfig.Perturbation cfg = ramseyConfig.getPerturbation();
         Integer campaignId = currentStage.getCampaignId();
 
-        List<ProgressionPoint> history = middlewareClient.getProgression(campaignId);
+        // Catch up the stages that advanced while this check waited for the lock: one short page,
+        // so the decision sees the same history as a full read made here would.
+        ProgressionHistory.Summary history = progressionHistory.refresh(campaignId);
         if (history.size() < cfg.getBasinStaleStages()) {
             return; // too young to have stalled
         }
 
         // Campaign minimum (the incumbent) and the first stage that achieved it. This is what a
         // kick restarts FROM, and what decides escalation — it is NOT the staleness clock.
-        ProgressionPoint minPoint = minPointFrom(history, Integer.MIN_VALUE);
+        ProgressionHistory.Point minPoint = history.incumbent();
         if (minPoint == null) {
             return;
         }
@@ -476,22 +482,19 @@ public class StageProgressionMonitor {
         //
         // Before the first kick the basin IS the whole campaign, so this also subsumes the old
         // "stages since the campaign min" wall.
-        int basinStart = lastKick == null ? Integer.MIN_VALUE : lastKick;
-        ProgressionPoint basinMin = minPointFrom(history, basinStart);
+        ProgressionHistory.Point basinMin = lastKick == null ? minPoint : history.floorSince(lastKick);
         if (basinMin == null) {
             return;
         }
-        long stagesSinceBasinMin = history.stream()
-                .filter(p -> p.getStageId() > basinMin.getStageId())
-                .count();
+        long stagesSinceBasinMin = history.stagesAfter(basinMin);
         if (stagesSinceBasinMin < cfg.getBasinStaleStages()) {
-            resetKickTrackingIfImproved(campaignId, minPoint.getStageId());
+            resetKickTrackingIfImproved(campaignId, minPoint.stageId());
             return; // basin is still improving
         }
 
         if (lastKick != null) {
             // The previous kick produced no new min (min stage predates the kick) -> escalate.
-            if (minPoint.getStageId() < lastKick) {
+            if (minPoint.stageId() < lastKick) {
                 fruitlessKicks.merge(campaignId, 1, Integer::sum);
             } else {
                 fruitlessKicks.remove(campaignId);
@@ -505,35 +508,21 @@ public class StageProgressionMonitor {
         int multiplier = Math.min(1 << Math.min(streak, 30), cfg.getEscalationCap());
         int pairs = cfg.getEdgePairs() * multiplier;
 
-        Graph incumbent = middlewareClient.getGraphById(minPoint.getGraphId());
+        Graph incumbent = middlewareClient.getGraphById(minPoint.graphId());
         if (incumbent == null || incumbent.getEdgeData() == null) {
             log.warn("Perturbation: could not fetch incumbent graph {} for campaign {}",
-                    minPoint.getGraphId(), campaignId);
+                    minPoint.graphId(), campaignId);
             return;
         }
 
         log.info("PERTURBATION: campaign {} basin stale ({} stages past basin floor {} @ stage {}; "
                         + "incumbent {} @ stage {}); kicking incumbent graph {} with {} edge pairs "
                         + "(escalation x{})",
-                campaignId, stagesSinceBasinMin, basinMin.getCliqueCount(), basinMin.getStageId(),
-                minPoint.getCliqueCount(), minPoint.getStageId(),
+                campaignId, stagesSinceBasinMin, basinMin.cliqueCount(), basinMin.stageId(),
+                minPoint.cliqueCount(), minPoint.stageId(),
                 incumbent.getGraphId(), pairs, multiplier);
 
         perturbAndAdvance(currentStage, incumbent, pairs, multiplier);
-    }
-
-    /**
-     * Lowest-count point at or after {@code fromStageId}, earliest stage breaking ties.
-     * With {@link Integer#MIN_VALUE} this is the campaign incumbent; with the last kick's stage
-     * it is the current basin's floor. The kick stage itself is always a spike (a perturbed graph
-     * counts far worse than the incumbent it came from), so including it never skews the min.
-     */
-    private static ProgressionPoint minPointFrom(List<ProgressionPoint> history, int fromStageId) {
-        return history.stream()
-                .filter(p -> p.getCliqueCount() != null && p.getStageId() >= fromStageId)
-                .min(java.util.Comparator.comparingLong(ProgressionPoint::getCliqueCount)
-                        .thenComparing(ProgressionPoint::getStageId))
-                .orElse(null);
     }
 
     /**
@@ -568,21 +557,18 @@ public class StageProgressionMonitor {
      * minus the last one (whose own fruitfulness is only decided at the next kick), matching
      * the live counter.
      */
-    void hydrateKickStateFromHistory(Integer campaignId, List<ProgressionPoint> history, ProgressionPoint minPoint) {
+    void hydrateKickStateFromHistory(Integer campaignId, ProgressionHistory.Summary history,
+                                     ProgressionHistory.Point minPoint) {
         if (lastKickStageId.containsKey(campaignId)) {
             return; // in-memory state is authoritative once present
         }
-        List<Integer> kickStages = history.stream()
-                .filter(p -> p.getDetails() != null && p.getDetails().startsWith(KICK_DETAILS_PREFIX))
-                .map(ProgressionPoint::getStageId)
-                .sorted()
-                .toList();
+        List<Integer> kickStages = history.kickStageIds();
         if (kickStages.isEmpty()) {
             return; // never kicked -> leave state empty (first-kick behavior)
         }
         int lastKick = kickStages.get(kickStages.size() - 1);
         lastKickStageId.put(campaignId, lastKick);
-        long kicksAfterMin = kickStages.stream().filter(s -> s > minPoint.getStageId()).count();
+        long kicksAfterMin = kickStages.stream().filter(s -> s > minPoint.stageId()).count();
         int streak = (int) Math.max(0, kicksAfterMin - 1);
         if (streak > 0) {
             fruitlessKicks.put(campaignId, streak);

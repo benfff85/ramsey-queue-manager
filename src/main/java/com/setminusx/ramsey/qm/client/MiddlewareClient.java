@@ -32,11 +32,17 @@ public class MiddlewareClient {
         return restTemplate.getForObject(campaignUrl + "/" + campaignId, Campaign.class);
     }
 
-    /** Full stage history of a campaign (used by perturbation wall detection). */
-    public List<ProgressionPoint> getProgression(Integer campaignId) {
-        return Optional.ofNullable(
-                        restTemplate.getForObject(campaignUrl + "/" + campaignId + "/progression",
-                                ProgressionPoint[].class))
+    /**
+     * Up to {@code limit} stages of a campaign's history after {@code sinceStageId}, in stage
+     * order; a page shorter than {@code limit} is the last. Never fetch the whole series: it is
+     * unbounded (3.66M stages and 555 MB by Oct 2026).
+     */
+    public List<ProgressionPoint> getProgressionPage(Integer campaignId, int sinceStageId, int limit) {
+        String uri = UriComponentsBuilder.fromUriString(campaignUrl + "/" + campaignId + "/progression")
+                .queryParam("sinceStageId", sinceStageId)
+                .queryParam("limit", limit)
+                .toUriString();
+        return Optional.ofNullable(restTemplate.getForObject(uri, ProgressionPoint[].class))
                 .map(Arrays::asList)
                 .orElse(Collections.emptyList());
     }
